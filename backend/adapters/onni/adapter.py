@@ -302,13 +302,27 @@ def parse_olympic_hill_floorplans_html(html: str, source_url: str) -> dict[str, 
 
     soup = BeautifulSoup(html, "html.parser")
     cards: list[dict[str, Any]] = []
-    for link in soup.select('a.floorplan-action-button[href*="/floorplans/plan-"]'):
+    seen_urls: set[str] = set()
+    for link in soup.select('a[href*="/floorplans/plan-"]'):
+        availability_url = urljoin(source_url, link["href"])
+        if availability_url in seen_urls:
+            continue
+        seen_urls.add(availability_url)
+        card = link.find_parent(class_=re.compile(r"card|floorplan"))
         plan_name = _clean(link.get("data-floorplan-name"))
+        if not plan_name and card:
+            heading = card.select_one("h2, h3, h4")
+            plan_name = _clean(heading.get_text(" ")) if heading else ""
+        if not plan_name:
+            plan_name = _clean(link.get_text(" "))
         if not plan_name:
             continue
-        price_min, price_max = _rent_range(link.get("data-floorplan-price"))
-        card = link.find_parent(class_=re.compile(r"card"))
         card_text = _clean(card.get_text(" ") if card else "")
+        price_text = link.get("data-floorplan-price")
+        if not price_text:
+            starting_price = re.search(r"Starting\s+at\s*(\$[\d,]+(?:\.\d{2})?)", card_text, re.I)
+            price_text = starting_price.group(1) if starting_price else ""
+        price_min, price_max = _rent_range(price_text)
         beds_match = re.search(r"(\d+)\s*Bed", card_text, re.I)
         baths_match = re.search(r"(\d+)\s*Bath", card_text, re.I)
         sqft_match = re.search(r"([0-9,]+)\s*Sq\.\s*Ft", card_text, re.I)
@@ -316,7 +330,7 @@ def parse_olympic_hill_floorplans_html(html: str, source_url: str) -> dict[str, 
         cards.append(
             {
                 "floor_plan": plan_name,
-                "floor_plan_slug": urlparse(urljoin(source_url, link["href"])).path.rstrip("/").split("/")[-1],
+                "floor_plan_slug": urlparse(availability_url).path.rstrip("/").split("/")[-1],
                 "floor_plan_id": link.get("data-floorplan-id") or None,
                 "beds": int(beds_match.group(1)) if beds_match else None,
                 "baths": int(baths_match.group(1)) if baths_match else None,
@@ -324,7 +338,7 @@ def parse_olympic_hill_floorplans_html(html: str, source_url: str) -> dict[str, 
                 "available_count": int(available_match.group(1)) if available_match else None,
                 "base_rent_min": price_min,
                 "base_rent_max": price_max,
-                "availability_url": urljoin(source_url, link["href"]),
+                "availability_url": availability_url,
             }
         )
     if not cards:
@@ -378,18 +392,27 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
     for row in section.select("tr.unit-container"):
         cells = row.select("td")
         if len(cells) < 4:
-            raise OnniAdapterError("Olympic + Hill unit row is missing required fields")
+            # RentCafe can leave placeholder rows in the DOM while its
+            # client-side filters are active. They are not inventory rows.
+            continue
+        apply_link = row.select_one("a[href]")
+        if not apply_link:
+            continue
+        cell_texts = [_clean(cell.get_text(" ")) for cell in cells]
+        unit_match = re.search(r"#?\s*(\d{3,5})\b", cell_texts[0])
+        sqft_match = re.search(r"(\d[\d,]*)", cell_texts[1])
+        if not unit_match or not sqft_match:
+            continue
         raw_row_id = row.get("id", "")
         unit_id = (
             raw_row_id[len("unit-container-"):]
             if raw_row_id.startswith("unit-container-")
             else raw_row_id
-        ) or _clean(cells[0].get_text(" ")).lstrip("#")
-        sqft = _money(_clean(cells[1].get_text(" ")))
-        rent_text = _clean(cells[2].get_text(" "))
+        ) or unit_match.group(1)
+        sqft = int(sqft_match.group(1).replace(",", ""))
+        rent_text = cell_texts[2]
         price_min, price_max = _rent_range(rent_text)
-        status = re.sub(r"^Date:\s*", "", _clean(cells[3].get_text(" ")), flags=re.I)
-        apply_link = row.select_one("a[href]")
+        status = re.sub(r"^Date:\s*", "", cell_texts[3], flags=re.I)
         application_url = urljoin(source_url, apply_link["href"]) if apply_link else None
         units.append(
             {

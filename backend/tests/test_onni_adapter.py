@@ -94,6 +94,11 @@ class OnniAdapterTests(unittest.TestCase):
           <table><tbody><tr class="unit-container" id="unit-container-43089391">
             <td>#3113</td><td>577</td><td>$2,551.00 to -$3,394.00</td><td>Available</td>
             <td><a href="https://rentolympicandhill.securecafe.com/onlineleasing/olympic-hill/oleapplication.aspx?FloorPlanID=5579466&UnitID=43089391">Apply</a></td>
+          </tr>
+          <tr class="unit-container d-none" id="unit-container-43090715">
+            <td><p>Apartment:</p> #0712</td><td><p>Sq. Ft.:</p> 584</td>
+            <td><p>Rent:</p>$2,499.00 to -$3,325.00</td><td><p>Date:</p>Available</td>
+            <td><a href="https://rentolympicandhill.securecafe.com/onlineleasing/olympic-hill/oleapplication.aspx?FloorPlanID=5579466&UnitID=43090715">Apply</a></td>
           </tr></tbody></table>
         </div>
         <h3>Essentials</h3><table><thead><tr><th>Fee Label</th><th>Amount</th><th>Applied</th><th>Frequency / Due At</th><th>Type</th></tr></thead><tbody><tr><td>Utility</td><td>Allocated</td><td>Per Unit</td><td>Monthly</td><td>REQUIRED</td></tr></tbody></table>
@@ -103,6 +108,23 @@ class OnniAdapterTests(unittest.TestCase):
         self.assertEqual(result["units"][0]["base_rent_min"], 2551)
         self.assertEqual(result["units"][0]["base_rent_max"], 3394)
         self.assertEqual(result["policies"]["fees"][0]["requirement"], "REQUIRED")
+        self.assertEqual(result["units"][1]["unit_id"], "43090715")
+        self.assertEqual(result["units"][1]["sqft"], 584)
+        self.assertTrue(result["units"][1]["available_now"])
+
+    def test_parses_all_olympic_plan_links_without_provider_specific_class(self):
+        html = '''
+        <div class="floorplan-card"><h2>Plan A</h2><span>1 Bed</span><span>1 Bath</span>
+          <span>577 Sq. Ft.</span><span>5 Available</span><span>Starting at $2,499.00</span>
+          <a href="/floorplans/plan-a">Availability for Plan A</a></div>
+        <div class="floorplan-card"><h2>Plan D</h2><span>2 Bed</span><span>2 Bath</span>
+          <span>862 Sq. Ft.</span><span>5 Available</span><span>Starting at $3,500.00</span>
+          <a href="/floorplans/plan-d">Availability for Plan D</a></div>
+        '''
+        result = parse_olympic_hill_floorplans_html(html, "https://www.rentolympicandhill.com/floorplans")
+        self.assertEqual([p["floor_plan"] for p in result["floorplans"]], ["Plan A", "Plan D"])
+        self.assertEqual(result["floorplans"][1]["beds"], 2)
+        self.assertEqual(result["floorplans"][1]["base_rent_min"], 3500)
 
     def test_parses_825_south_hill_shared_availability_rows(self):
         html = '''
