@@ -89,6 +89,14 @@ def _date_from_status(status: str) -> str | None:
         return None
 
 
+def _rent_range(value: str | None) -> tuple[int | None, int | None]:
+    numbers = re.findall(r"\$?\s*([0-9][0-9,]*(?:\.\d{2})?)", value or "")
+    parsed = [round(float(number.replace(",", ""))) for number in numbers]
+    if not parsed:
+        return None, None
+    return parsed[0], parsed[-1]
+
+
 def _plan_meta(group: Any) -> dict[str, str | None]:
     intro = _clean(group.select_one(".floorplan__availability__intro").get_text(" ")
                    if group.select_one(".floorplan__availability__intro") else "")
@@ -252,6 +260,137 @@ def parse_hope_flower_html(html: str, source_url: str) -> dict[str, Any]:
     }
 
 
+def parse_olympic_hill_floorplans_html(html: str, source_url: str) -> dict[str, Any]:
+    """Parse Olympic + Hill's floorplan summary page.
+
+    This page publishes plan-level price/count cards. The individual unit
+    rows are on linked ``/floorplans/plan-*`` pages and are parsed separately.
+    """
+
+    soup = BeautifulSoup(html, "html.parser")
+    cards: list[dict[str, Any]] = []
+    for link in soup.select('a.floorplan-action-button[href*="/floorplans/plan-"]'):
+        plan_name = _clean(link.get("data-floorplan-name"))
+        if not plan_name:
+            continue
+        price_min, price_max = _rent_range(link.get("data-floorplan-price"))
+        card = link.find_parent(class_=re.compile(r"card"))
+        card_text = _clean(card.get_text(" ") if card else "")
+        beds_match = re.search(r"(\d+)\s*Bed", card_text, re.I)
+        baths_match = re.search(r"(\d+)\s*Bath", card_text, re.I)
+        sqft_match = re.search(r"([0-9,]+)\s*Sq\.\s*Ft", card_text, re.I)
+        available_match = re.search(r"(\d+)\s*Available", card_text, re.I)
+        cards.append(
+            {
+                "floor_plan": plan_name,
+                "floor_plan_slug": urlparse(urljoin(source_url, link["href"])).path.rstrip("/").split("/")[-1],
+                "floor_plan_id": link.get("data-floorplan-id") or None,
+                "beds": int(beds_match.group(1)) if beds_match else None,
+                "baths": int(baths_match.group(1)) if baths_match else None,
+                "sqft": int(sqft_match.group(1).replace(",", "")) if sqft_match else None,
+                "available_count": int(available_match.group(1)) if available_match else None,
+                "base_rent_min": price_min,
+                "base_rent_max": price_max,
+                "availability_url": urljoin(source_url, link["href"]),
+            }
+        )
+    if not cards:
+        raise OnniAdapterError("Olympic + Hill floorplan markup not found; refusing to return zero plans")
+
+    nudge = soup.select_one("#customNudge")
+    concessions: list[dict[str, Any]] = []
+    if nudge:
+        nudge_text = _clean(nudge.get_text(" "))
+        title = _clean(nudge.select_one("#customNudgeTitle").get_text(" ")) if nudge.select_one("#customNudgeTitle") else None
+        concessions.append(
+            {
+                "title": title,
+                "text": nudge_text,
+                "terms": next((line for line in re.split(r"(?<=!)\s+|(?<=\.)\s+", nudge_text) if "must" in line.lower() or "restriction" in line.lower()), None),
+                "source_url": source_url,
+            }
+        )
+
+    return {
+        "provider": "onni",
+        "building_id": "olympic-hill",
+        "building_name": "Olympic + Hill",
+        "source_url": source_url,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        "floorplans": cards,
+        "units": [],
+        "policies": parse_building_policies(soup, source_url),
+        "concessions": concessions,
+        "warnings": [
+            "The summary page contains plan-level counts and prices; linked plan pages contain unit-level inventory.",
+            "Availability and incentives can change without notice.",
+        ],
+    }
+
+
+def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
+    """Parse one Olympic + Hill floorplan page and its actual unit rows."""
+
+    soup = BeautifulSoup(html, "html.parser")
+    section = soup.select_one(".floorplan-section")
+    if not section:
+        raise OnniAdapterError("Olympic + Hill plan markup not found; refusing to return zero units")
+    plan_name = _clean(section.get("data-name") or section.select_one("h2").get_text(" "))
+    floor_plan_id = section.get("data-id")
+    header_text = _clean(section.select_one(".row").get_text(" ") if section.select_one(".row") else "")
+    beds_match = re.search(r"(\d+)\s*Bedroom", header_text, re.I)
+    baths_match = re.search(r"(\d+)\s*Bathroom", header_text, re.I)
+    units: list[dict[str, Any]] = []
+    for row in section.select("tr.unit-container"):
+        cells = row.select("td")
+        if len(cells) < 4:
+            raise OnniAdapterError("Olympic + Hill unit row is missing required fields")
+        unit_id = row.get("id", "").removeprefix("unit-container-") or _clean(cells[0].get_text(" ")).lstrip("#")
+        sqft = _money(_clean(cells[1].get_text(" ")))
+        rent_text = _clean(cells[2].get_text(" "))
+        price_min, price_max = _rent_range(rent_text)
+        status = re.sub(r"^Date:\s*", "", _clean(cells[3].get_text(" ")), flags=re.I)
+        apply_link = row.select_one("a[href]")
+        application_url = urljoin(source_url, apply_link["href"]) if apply_link else None
+        units.append(
+            {
+                "unit_id": unit_id,
+                "floor_plan": plan_name,
+                "floor_plan_slug": urlparse(source_url).path.rstrip("/").split("/")[-1],
+                "category": f"{beds_match.group(1)} br" if beds_match else None,
+                "tower": None,
+                "beds": int(beds_match.group(1)) if beds_match else None,
+                "baths": int(baths_match.group(1)) if baths_match else None,
+                "sqft": sqft,
+                "base_rent_min": price_min,
+                "base_rent_max": price_max,
+                "screening_base_rent": price_min,
+                "status": "available" if status.lower() == "available" else status,
+                "status_raw": status,
+                "available_now": status.lower() == "available",
+                "available_date": _date_from_status(status),
+                "application_url": application_url,
+                "floor_plan_id": _query_value(application_url or "", "FloorPlanID") or floor_plan_id,
+                "securecafe_unit_id": _query_value(application_url or "", "UnitID"),
+            }
+        )
+    if not units:
+        raise OnniAdapterError("Olympic + Hill plan contained no unit rows")
+    return {
+        "provider": "onni",
+        "building_id": "olympic-hill",
+        "building_name": "Olympic + Hill",
+        "source_url": source_url,
+        "floor_plan": plan_name,
+        "floor_plan_id": floor_plan_id,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        "units": units,
+        "policies": parse_building_policies(soup, source_url),
+    }
+
+
 def parse_unit_detail_html(
     html: str,
     source_url: str,
@@ -328,12 +467,28 @@ def _beds_from_category(category: str | None) -> int | None:
 class OnniAdapter:
     """Provider-level adapter with building-specific public page parsers."""
 
-    def __init__(self, timeout_seconds: int = 30, user_agent: str = "LARental-OnniAdapter/0.1"):
+    def __init__(
+        self,
+        timeout_seconds: int = 30,
+        user_agent: str = (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36"
+        ),
+    ):
         self.timeout_seconds = timeout_seconds
         self.user_agent = user_agent
 
     def fetch_html(self, url: str) -> str:
-        request = Request(url, headers={"User-Agent": self.user_agent})
+        request = Request(
+            url,
+            headers={
+                "User-Agent": self.user_agent,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": f"{urlparse(url).scheme}://{urlparse(url).netloc}/",
+                "Upgrade-Insecure-Requests": "1",
+            },
+        )
         with urlopen(request, timeout=self.timeout_seconds) as response:
             content_type = response.headers.get_content_type()
             if content_type not in {"text/html", "application/xhtml+xml"}:
@@ -341,19 +496,33 @@ class OnniAdapter:
             return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
 
     def parse(self, building_id: str, html: str, source_url: str | None = None) -> dict[str, Any]:
-        if building_id != "hope-flower":
-            raise OnniAdapterError(
-                f"No unit-level parser is enabled for {building_id}; Olympic + Hill needs its own page-shape validation"
-            )
         building = BUILDINGS[building_id]
-        return parse_hope_flower_html(html, source_url or building.availability_url)
+        resolved_url = source_url or building.availability_url
+        if building_id == "hope-flower":
+            return parse_hope_flower_html(html, resolved_url)
+        if building_id == "olympic-hill":
+            return parse_olympic_hill_floorplans_html(html, resolved_url)
+        raise OnniAdapterError(f"No parser is enabled for {building_id}")
 
     def fetch(self, building_id: str) -> dict[str, Any]:
         building = BUILDINGS.get(building_id)
         if not building:
             raise OnniAdapterError(f"Unknown Onni building: {building_id}")
         html = self.fetch_html(building.availability_url)
-        return self.parse(building_id, html, building.availability_url)
+        result = self.parse(building_id, html, building.availability_url)
+        if building_id == "olympic-hill":
+            # Olympic + Hill publishes counts on the index and actual rows on
+            # each linked plan page. Fetch those pages read-only and merge the
+            # normalized unit rows into the same output shape as Hope + Flower.
+            units: list[dict[str, Any]] = []
+            for plan in result["floorplans"]:
+                plan_html = self.fetch_html(plan["availability_url"])
+                plan_result = parse_olympic_hill_plan_html(plan_html, plan["availability_url"])
+                units.extend(plan_result["units"])
+                if not result["policies"]["fees"] and plan_result["policies"]["fees"]:
+                    result["policies"] = plan_result["policies"]
+            result["units"] = units
+        return result
 
     def fetch_unit_quote(
         self,
@@ -369,7 +538,11 @@ class OnniAdapter:
             query["MoveInDate"] = [move_in_date]
         detail_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
         html = self.fetch_html(detail_url)
-        return parse_unit_detail_html(html, detail_url, move_in_date, lease_term_months)
+        result = parse_unit_detail_html(html, detail_url, move_in_date, lease_term_months)
+        if "rentolympicandhill.securecafe.com" in parsed.netloc:
+            result["building_id"] = "olympic-hill"
+            result["building_name"] = "Olympic + Hill"
+        return result
 
 
 def parse_fixture(path: str | Path, building_id: str = "hope-flower") -> dict[str, Any]:

@@ -4,7 +4,7 @@ This folder is reserved for the backend and provider adapters that will eventual
 
 ## Current scope
 
-The first implementation target is the **Onni provider**, using **Hope + Flower** as the first building. Olympic + Hill is the second validation building because it uses the same provider family.
+The first implementation target is the **Onni provider**, using **Hope + Flower** as the first building. Olympic + Hill is now the second validated building; it uses the same provider family but publishes unit rows on linked plan pages rather than directly on the floorplan index.
 
 The first milestone intentionally excludes:
 
@@ -14,7 +14,7 @@ The first milestone intentionally excludes:
 - writing dynamic inventory into the Vault;
 - automatic application or registration actions.
 
-The adapter should first produce inspectable normalized JSON and preserve the raw provider response. Once the output is stable across Hope + Flower and Olympic + Hill, persistence and polling can be added without redesigning the provider parser.
+The adapter produces inspectable normalized JSON and preserves the provider-source boundary. Persistence and polling can be added without redesigning the provider parser.
 
 ## Planned layout
 
@@ -85,3 +85,5 @@ This returns the selected base rent, recurring charges exposed by SecureCafe, to
 The normal building fetch also returns a separate `policies` object. It parses the official page's fee guide into building-level records (application and deposits, required utilities, parking, pet rent, storage, and situational charges) and preserves non-numeric values such as `Allocated (Utilities)`, ranges, and percentage formulas. It also captures public concession banners and their stated terms.
 
 These policies are deliberately not copied onto every unit. A broad scan can use `policies` together with inventory, while `--unit-url` remains the on-demand path for a specific unit's move-in date, lease term, recurring charges, and unit-specific special.
+
+Olympic + Hill uses a two-step read: the official floorplan index supplies plan-level counts, prices, and public promotions; each linked plan page supplies the actual unit rows. The adapter merges those rows into the same normalized `units` shape used by Hope + Flower.

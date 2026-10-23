@@ -36,7 +36,7 @@ Checked the official page on 2026-10-23:
 - URL: `https://www.rentolympicandhill.com/floorplans`
 - It is also Onni/RentCafe, but the current page uses the newer RentCafe floor-plan widget. The visible page provides plan-level starting rent and available-count summaries, while the Hope + Flower unit-row attributes are not present.
 - The page loads RentCafe widget assets and references property ID `1774338`; it also exposes official fee-guide and floor-plan assets.
-- Olympic + Hill should reuse the provider transport/configuration, but needs a separate parser/endpoint investigation before it is allowed to return unit-level records. The adapter currently fails closed for that building rather than reporting an empty inventory.
+- Olympic + Hill reuses the provider transport/configuration but has a two-step page shape: the floorplan index publishes summary cards, while each `/floorplans/plan-*` page publishes actual unit rows. The adapter validates the index, fetches each linked plan page read-only, and merges the normalized unit records.
 
 ## Normalized output target
 
@@ -74,7 +74,7 @@ The first JSON output should be easy to inspect and should not depend on SQLite:
 
 The Onni adapter is ready for the next stage only when:
 
-- the same parser handles Hope + Flower and Olympic + Hill;
+- the same provider adapter handles Hope + Flower and Olympic + Hill, with building-specific page parsers;
 - fixture tests reproduce the expected normalized fields;
 - a failed request cannot appear as zero available units;
 - the output distinguishes base rent from total monthly price;

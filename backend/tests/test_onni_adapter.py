@@ -10,6 +10,8 @@ from adapters.onni import (  # noqa: E402
     OnniAdapterError,
     parse_building_policies,
     parse_fixture,
+    parse_olympic_hill_floorplans_html,
+    parse_olympic_hill_plan_html,
     parse_unit_detail_html,
 )
 from bs4 import BeautifulSoup
@@ -83,6 +85,23 @@ class OnniAdapterTests(unittest.TestCase):
         with self.assertRaises(OnniAdapterError):
             from adapters.onni import parse_hope_flower_html
             parse_hope_flower_html("<html></html>", "https://example.test")
+
+    def test_parses_olympic_hill_plan_rows(self):
+        html = '''
+        <div class="floorplan-section" data-name="Plan A" data-id="5579466">
+          <div class="row"><h2>Plan A</h2><div><span>1 Bedroom</span> | <span>1 Bathroom</span></div></div>
+          <table><tbody><tr class="unit-container" id="unit-container-43089391">
+            <td>#3113</td><td>577</td><td>$2,551.00 to -$3,394.00</td><td>Available</td>
+            <td><a href="https://rentolympicandhill.securecafe.com/onlineleasing/olympic-hill/oleapplication.aspx?FloorPlanID=5579466&UnitID=43089391">Apply</a></td>
+          </tr></tbody></table>
+        </div>
+        <h3>Essentials</h3><table><thead><tr><th>Fee Label</th><th>Amount</th><th>Applied</th><th>Frequency / Due At</th><th>Type</th></tr></thead><tbody><tr><td>Utility</td><td>Allocated</td><td>Per Unit</td><td>Monthly</td><td>REQUIRED</td></tr></tbody></table>
+        '''
+        result = parse_olympic_hill_plan_html(html, "https://www.rentolympicandhill.com/floorplans/plan-a")
+        self.assertEqual(result["units"][0]["unit_id"], "43089391")
+        self.assertEqual(result["units"][0]["base_rent_min"], 2551)
+        self.assertEqual(result["units"][0]["base_rent_max"], 3394)
+        self.assertEqual(result["policies"]["fees"][0]["requirement"], "REQUIRED")
 
 
 if __name__ == "__main__":
