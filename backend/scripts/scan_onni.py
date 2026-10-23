@@ -7,29 +7,42 @@ import argparse
 import json
 from pathlib import Path
 import sys
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from adapters.onni import OnniAdapter, parse_fixture  # noqa: E402
+from adapters.onni import BUILDINGS, OnniAdapter, OnniAdapterError, parse_fixture  # noqa: E402
 from storage.sqlite import InventoryDatabase  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("building", choices=["hope-flower", "olympic-hill", "825-south-hill"])
+    parser.add_argument("building", choices=[*BUILDINGS.keys(), "all"])
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "rentalassistant.sqlite3")
     parser.add_argument("--fixture", type=Path)
     args = parser.parse_args()
 
-    adapter = OnniAdapter()
-    result = parse_fixture(args.fixture, args.building) if args.fixture else adapter.fetch(args.building)
     scan = InventoryDatabase(args.db)
     scan.initialize()
-    summary = scan.upsert_scan(result)
-    print(json.dumps({"database": str(args.db), **summary.__dict__}, indent=2))
-    return 0
+    adapter = OnniAdapter()
+    building_ids = list(BUILDINGS) if args.building == "all" else [args.building]
+    if args.fixture and args.building == "all":
+        parser.error("--fixture can only be used with one building, not all")
+
+    summaries: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    for building_id in building_ids:
+        try:
+            result = parse_fixture(args.fixture, building_id) if args.fixture else adapter.fetch(building_id)
+            summary = scan.upsert_scan(result)
+            summaries.append(summary.__dict__)
+        except (OnniAdapterError, OSError, ValueError) as exc:
+            failures.append({"building_id": building_id, "error": str(exc)})
+
+    print(json.dumps({"database": str(args.db), "scans": summaries, "failures": failures}, indent=2))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Onni/RentCafe public-site adapter."""
 
 from .adapter import (
+    BUILDINGS,
     OnniAdapter,
     OnniAdapterError,
     parse_fixture,
@@ -14,6 +15,7 @@ from .adapter import (
 )
 
 __all__ = [
+    "BUILDINGS",
     "OnniAdapter",
     "OnniAdapterError",
     "parse_fixture",

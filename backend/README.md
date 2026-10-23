@@ -40,6 +40,18 @@ python3 backend/scripts/scan_onni.py 825-south-hill \
   --db backend/data/rentalassistant.sqlite3
 ```
 
+Scan every currently supported Onni building in one run:
+
+```bash
+python3 backend/scripts/scan_onni.py all \
+  --db backend/data/rentalassistant.sqlite3
+```
+
+The `all` command processes Hope + Flower, Olympic + Hill and 825 South Hill,
+then prints a per-building summary. Successful buildings are committed even
+if another building fails; the command exits non-zero and lists failures so a
+partial provider outage cannot look like a clean full scan.
+
 The database is local generated state and is ignored by Git. A successful scan
 upserts current units; a unit missing from a successful scan becomes
 `inactive`, while its row and history remain available for later comparison.
