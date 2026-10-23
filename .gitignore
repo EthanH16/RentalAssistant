@@ -1,0 +1,19 @@
+# Local Python environment and caches
+backend/.venv/
+**/__pycache__/
+*.py[cod]
+
+# Generated adapter output and local logs
+backend/output/
+*.log
+
+# Local/editor/OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+

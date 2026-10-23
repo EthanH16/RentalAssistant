@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>USWOO Building Atlas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="intro">
+        <div class="eyebrow">USWOO REALTY · INTERNAL ATLAS</div>
+        <div class="intro-row">
+          <div>
+            <h1>Find the right building<br /><span>before the search gets noisy.</span></h1>
+            <p class="dek">A first-pass visual index of collaboration buildings across LA. Explore by neighborhood, relationship, and reference price—then open the building profile for the real operating details.</p>
+          </div>
+          <div class="stamp"><span id="visibleCount">0</span><small>visible<br />properties</small></div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="sidebar">
+          <div class="search-wrap"><span>⌕</span><input id="search" type="search" placeholder="Search building or area" /></div>
+          <div class="filter-label">SOURCE</div>
+          <div class="segmented" id="sourceFilters">
+            <button class="active" data-source="all">All</button>
+            <button data-source="Direct">Direct</button>
+            <button data-source="Niko">Niko</button>
+          </div>
+          <div class="filter-label">AREA</div>
+          <select id="areaFilter"><option value="all">All areas</option></select>
+          <div class="filter-label">FIRST-PASS PRICE</div>
+          <div class="price-row"><input id="minPrice" type="number" min="0" step="100" placeholder="Min" /><span>—</span><input id="maxPrice" type="number" min="0" step="100" placeholder="Max" /></div>
+          <label class="check"><input id="hasConcession" type="checkbox" /> <span>Has concession reference</span></label>
+          <div class="legend">
+            <div><i class="dot partner"></i> Direct partnership</div>
+            <div><i class="dot niko"></i> Niko list</div>
+          </div>
+          <button id="reset" class="reset">Reset filters ↺</button>
+        </aside>
+
+        <section class="map-panel">
+          <div id="map"></div>
+          <div class="map-note"><span class="pulse"></span> Reference map · locations are approximate in this demo</div>
+        </section>
+
+        <aside class="results">
+          <div class="results-head"><div><div class="eyebrow">SHORTLIST VIEW</div><h2>Buildings</h2></div><div id="resultMeta" class="mono"></div></div>
+          <div id="cards" class="cards"></div>
+        </aside>
+      </section>
+    </main>
+    <script src="https://unpkg.com/maplibre-gl@5.6.1/dist/maplibre-gl.js"></script>
+    <script src="buildings-data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
