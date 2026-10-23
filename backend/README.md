@@ -4,7 +4,7 @@ This folder is reserved for the backend and provider adapters that will eventual
 
 ## Current scope
 
-The first implementation target is the **Onni provider**, using **Hope + Flower** as the first building. Olympic + Hill is now the second validated building; it uses the same provider family but publishes unit rows on linked plan pages rather than directly on the floorplan index.
+The first implementation target is the **Onni provider**, using **Hope + Flower** as the first building. **825 South Hill** is now validated against the same server-rendered availability shape. Olympic + Hill is also validated; it uses the same provider family but publishes unit rows on linked plan pages rather than directly on the floorplan index.
 
 The first milestone intentionally excludes:
 
@@ -44,6 +44,7 @@ Build the adapter around the provider, not around one building:
 ```text
 OnniAdapter
   ├── Hope + Flower input/config
+  ├── 825 South Hill input/config
   └── Olympic + Hill input/config
 ```
 
@@ -87,3 +88,8 @@ The normal building fetch also returns a separate `policies` object. It parses t
 These policies are deliberately not copied onto every unit. A broad scan can use `policies` together with inventory, while `--unit-url` remains the on-demand path for a specific unit's move-in date, lease term, recurring charges, and unit-specific special.
 
 Olympic + Hill uses a two-step read: the official floorplan index supplies plan-level counts, prices, and public promotions; each linked plan page supplies the actual unit rows. The adapter merges those rows into the same normalized `units` shape used by Hope + Flower.
+
+825 South Hill uses the same single-page server-rendered availability shape as
+Hope + Flower, including unit rows, SecureCafe application links, fee-guide
+tables and building-level policy metadata. Both buildings are parsed by the
+shared Onni availability parser.

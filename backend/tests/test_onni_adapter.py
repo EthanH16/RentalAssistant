@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT))
 from adapters.onni import (  # noqa: E402
     OnniAdapterError,
     parse_building_policies,
+    parse_825_south_hill_html,
     parse_fixture,
     parse_olympic_hill_floorplans_html,
     parse_olympic_hill_plan_html,
@@ -102,6 +103,36 @@ class OnniAdapterTests(unittest.TestCase):
         self.assertEqual(result["units"][0]["base_rent_min"], 2551)
         self.assertEqual(result["units"][0]["base_rent_max"], 3394)
         self.assertEqual(result["policies"]["fees"][0]["requirement"], "REQUIRED")
+
+    def test_parses_825_south_hill_shared_availability_rows(self):
+        html = '''
+        <div class="floorplan__availability__panel js-plan-group" data-cat="2-bed-den">
+          <div class="floorplan__availability__intro"><h2>Plan A2</h2><p>2 Bed + Den</p></div>
+          <div class="floorplan__availability__row js-plan-row" data-unit="0522" data-rent-min="4060" data-rent-max="5246">
+            <ul><li class="floorplan__availability__li--data">#522</li><li class="floorplan__availability__li--data">2 Bed + Den</li><li class="floorplan__availability__li--data">1030 sqft</li><li class="floorplan__availability__li--data">Available</li></ul>
+            <a href="https://825southhilldtla.securecafe.com/onlineleasing/825-south-hill/oleapplication.aspx?FloorPlanID=2413008&UnitID=29417540">Apply</a>
+          </div>
+        </div>
+        '''
+        result = parse_825_south_hill_html(html, "https://825southhilldtla.com/availability")
+        self.assertEqual(result["building_id"], "825-south-hill")
+        self.assertEqual(result["building_name"], "825 South Hill")
+        self.assertEqual(result["units"][0]["unit_id"], "0522")
+        self.assertEqual(result["units"][0]["base_rent_min"], 4060)
+        self.assertTrue(result["units"][0]["available_now"])
+
+    def test_ignores_provider_placeholder_rent(self):
+        html = '''
+        <div class="floorplan__availability__panel js-plan-group" data-cat="1-bed">
+          <div class="floorplan__availability__intro">PLAN O | 1 bed</div>
+          <div class="floorplan__availability__row js-plan-row" data-unit="4602" data-rent-min="$-1" data-rent-max="$-1">
+            <ul><li class="floorplan__availability__li--data">#4602</li><li class="floorplan__availability__li--data">$-1</li><li class="floorplan__availability__li--data">538 sqft</li><li class="floorplan__availability__li--data">11/22/2026</li></ul>
+          </div>
+        </div>
+        '''
+        result = parse_825_south_hill_html(html, "https://825southhilldtla.com/availability")
+        self.assertIsNone(result["units"][0]["base_rent_min"])
+        self.assertIsNone(result["units"][0]["base_rent_max"])
 
 
 if __name__ == "__main__":

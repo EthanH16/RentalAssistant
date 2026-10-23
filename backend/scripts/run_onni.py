@@ -17,7 +17,7 @@ from adapters.onni import OnniAdapter, parse_fixture  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("building", choices=["hope-flower", "olympic-hill"])
+    parser.add_argument("building", choices=["hope-flower", "olympic-hill", "825-south-hill"])
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--unit-url", help="SecureCafe application URL for one unit")
     parser.add_argument("--move-in-date", help="Move-in date, for example 12/13/2026")

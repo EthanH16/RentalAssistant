@@ -5,6 +5,7 @@
 | Building | Role | Expected use |
 |---|---|---|
 | Hope + Flower | First target | Inspect the official site and identify the provider response shape |
+| 825 South Hill | Shared-shape validation | Confirm the same Onni/RentCafe unit-row and fee-guide parser works |
 | Olympic + Hill | Validation target | Confirm the adapter is provider-level, not building-specific |
 
 ## Investigation sequence
@@ -37,6 +38,22 @@ Checked the official page on 2026-10-23:
 - It is also Onni/RentCafe, but the current page uses the newer RentCafe floor-plan widget. The visible page provides plan-level starting rent and available-count summaries, while the Hope + Flower unit-row attributes are not present.
 - The page loads RentCafe widget assets and references property ID `1774338`; it also exposes official fee-guide and floor-plan assets.
 - Olympic + Hill reuses the provider transport/configuration but has a two-step page shape: the floorplan index publishes summary cards, while each `/floorplans/plan-*` page publishes actual unit rows. The adapter validates the index, fetches each linked plan page read-only, and merges the normalized unit records.
+
+## Third inspection result — 825 South Hill
+
+Checked the official page on 2026-10-23:
+
+- URL: `https://825southhilldtla.com/availability`
+- The page uses the same server-rendered `.js-plan-group` / `.js-plan-row`
+  structure as Hope + Flower.
+- Unit rows expose the same unit ID, rent range, square footage, status and
+  SecureCafe application-link fields.
+- The page includes a building-level fee guide and official contact details;
+  these are parsed into the shared `policies` object.
+- A live browser check returned 34 unit rows across 16 plan groups. The page
+  included current available units, future-dated units, one `Spot Special!`
+  status, and one `$-1` provider placeholder that the parser now converts to
+  `null` rather than treating it as a real rent.
 
 ## Normalized output target
 

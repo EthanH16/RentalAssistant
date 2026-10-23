@@ -1,6 +1,8 @@
 """Read-only adapter for Onni public availability pages.
 
-The first supported page is Hope + Flower's server-rendered availability page.
+The first supported pages use Onni/RentCafe's server-rendered availability
+markup. Hope + Flower and 825 South Hill currently share the same page shape;
+Olympic + Hill uses a related two-step plan-page flow.
 The parser deliberately fails closed when the page shape changes; it must not
 turn a parsing failure into an empty availability result.
 """
@@ -39,11 +41,16 @@ BUILDINGS = {
     "olympic-hill": OnniBuilding(
         "olympic-hill", "Olympic + Hill", "https://www.rentolympicandhill.com/floorplans"
     ),
+    "825-south-hill": OnniBuilding(
+        "825-south-hill", "825 South Hill", "https://825southhilldtla.com/availability"
+    ),
 }
 
 
 def _money(value: str | None) -> int | None:
     if not value:
+        return None
+    if re.search(r"\$\s*-1(?:\.0+)?\b", value):
         return None
     digits = re.sub(r"[^0-9]", "", value)
     return int(digits) if digits else None
@@ -98,8 +105,13 @@ def _rent_range(value: str | None) -> tuple[int | None, int | None]:
 
 
 def _plan_meta(group: Any) -> dict[str, str | None]:
-    intro = _clean(group.select_one(".floorplan__availability__intro").get_text(" ")
-                   if group.select_one(".floorplan__availability__intro") else "")
+    intro_element = group.select_one(".floorplan__availability__intro")
+    heading = intro_element.select_one("h2, h3") if intro_element else None
+    detail = intro_element.select_one("p") if intro_element else None
+    if heading and detail:
+        intro = f"{_clean(heading.get_text(' '))} | {_clean(detail.get_text(' '))}"
+    else:
+        intro = _clean(intro_element.get_text(" ") if intro_element else "")
     # Example: PLAN A | studio | FLOWER
     parts = [p.strip() for p in intro.split("|") if p.strip()]
     plan_name = parts[0][5:].strip() if parts and parts[0].upper().startswith("PLAN ") else (parts[0] if parts else None)
@@ -196,15 +208,20 @@ def parse_building_policies(soup: Any, source_url: str) -> dict[str, Any]:
     }
 
 
-def parse_hope_flower_html(html: str, source_url: str) -> dict[str, Any]:
-    """Parse Hope + Flower's current server-rendered availability markup."""
+def parse_onni_availability_html(
+    html: str,
+    source_url: str,
+    building_id: str,
+    building_name: str,
+) -> dict[str, Any]:
+    """Parse a shared Onni/RentCafe server-rendered availability page."""
 
     soup = BeautifulSoup(html, "html.parser")
     groups = soup.select(".js-plan-group")
     rows = soup.select(".js-plan-row")
     if not groups or not rows:
         raise OnniAdapterError(
-            "Hope + Flower availability markup not found; refusing to return zero units"
+            f"{building_name} availability markup not found; refusing to return zero units"
         )
 
     units: list[dict[str, Any]] = []
@@ -246,8 +263,8 @@ def parse_hope_flower_html(html: str, source_url: str) -> dict[str, Any]:
 
     return {
         "provider": "onni",
-        "building_id": "hope-flower",
-        "building_name": "Hope + Flower",
+        "building_id": building_id,
+        "building_name": building_name,
         "source_url": source_url,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "status": "ok",
@@ -258,6 +275,22 @@ def parse_hope_flower_html(html: str, source_url: str) -> dict[str, Any]:
             "Availability and incentives can change without notice.",
         ],
     }
+
+
+def parse_hope_flower_html(html: str, source_url: str) -> dict[str, Any]:
+    """Parse Hope + Flower's current server-rendered availability markup."""
+
+    return parse_onni_availability_html(
+        html, source_url, "hope-flower", "Hope + Flower"
+    )
+
+
+def parse_825_south_hill_html(html: str, source_url: str) -> dict[str, Any]:
+    """Parse 825 South Hill's current server-rendered availability markup."""
+
+    return parse_onni_availability_html(
+        html, source_url, "825-south-hill", "825 South Hill"
+    )
 
 
 def parse_olympic_hill_floorplans_html(html: str, source_url: str) -> dict[str, Any]:
@@ -500,6 +533,8 @@ class OnniAdapter:
         resolved_url = source_url or building.availability_url
         if building_id == "hope-flower":
             return parse_hope_flower_html(html, resolved_url)
+        if building_id == "825-south-hill":
+            return parse_825_south_hill_html(html, resolved_url)
         if building_id == "olympic-hill":
             return parse_olympic_hill_floorplans_html(html, resolved_url)
         raise OnniAdapterError(f"No parser is enabled for {building_id}")
@@ -542,6 +577,9 @@ class OnniAdapter:
         if "rentolympicandhill.securecafe.com" in parsed.netloc:
             result["building_id"] = "olympic-hill"
             result["building_name"] = "Olympic + Hill"
+        if "825southhilldtla.securecafe.com" in parsed.netloc:
+            result["building_id"] = "825-south-hill"
+            result["building_name"] = "825 South Hill"
         return result
 
 
