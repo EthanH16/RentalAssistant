@@ -33,13 +33,30 @@ def main() -> int:
 
     summaries: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
-    for building_id in building_ids:
+    for index, building_id in enumerate(building_ids, start=1):
+        print(
+            f"[{index}/{len(building_ids)}] Scanning {building_id}...",
+            file=sys.stderr,
+            flush=True,
+        )
         try:
             result = parse_fixture(args.fixture, building_id) if args.fixture else adapter.fetch(building_id)
             summary = scan.upsert_scan(result)
             summaries.append(summary.__dict__)
+            print(
+                f"[{index}/{len(building_ids)}] Saved {building_id}: "
+                f"{summary.units_seen} seen, {summary.units_added} added, "
+                f"{summary.units_changed} changed, {summary.units_marked_inactive} inactive",
+                file=sys.stderr,
+                flush=True,
+            )
         except (OnniAdapterError, OSError, ValueError) as exc:
             failures.append({"building_id": building_id, "error": str(exc)})
+            print(
+                f"[{index}/{len(building_ids)}] Failed {building_id}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     print(json.dumps({"database": str(args.db), "scans": summaries, "failures": failures}, indent=2))
     return 1 if failures else 0
