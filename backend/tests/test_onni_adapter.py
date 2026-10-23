@@ -104,11 +104,13 @@ class OnniAdapterTests(unittest.TestCase):
         <h3>Essentials</h3><table><thead><tr><th>Fee Label</th><th>Amount</th><th>Applied</th><th>Frequency / Due At</th><th>Type</th></tr></thead><tbody><tr><td>Utility</td><td>Allocated</td><td>Per Unit</td><td>Monthly</td><td>REQUIRED</td></tr></tbody></table>
         '''
         result = parse_olympic_hill_plan_html(html, "https://www.rentolympicandhill.com/floorplans/plan-a")
-        self.assertEqual(result["units"][0]["unit_id"], "43089391")
+        self.assertEqual(result["units"][0]["unit_id"], "3113")
+        self.assertEqual(result["units"][0]["provider_unit_id"], "43089391")
         self.assertEqual(result["units"][0]["base_rent_min"], 2551)
         self.assertEqual(result["units"][0]["base_rent_max"], 3394)
         self.assertEqual(result["policies"]["fees"][0]["requirement"], "REQUIRED")
-        self.assertEqual(result["units"][1]["unit_id"], "43090715")
+        self.assertEqual(result["units"][1]["unit_id"], "0712")
+        self.assertEqual(result["units"][1]["provider_unit_id"], "43090715")
         self.assertEqual(result["units"][1]["sqft"], 584)
         self.assertTrue(result["units"][1]["available_now"])
 

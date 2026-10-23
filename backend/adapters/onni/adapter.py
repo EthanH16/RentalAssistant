@@ -420,12 +420,10 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
         sqft_match = re.search(r"(\d[\d,]*)", cell_texts[1])
         if not unit_match or not sqft_match:
             continue
-        raw_row_id = row.get("id", "")
-        unit_id = (
-            raw_row_id[len("unit-container-"):]
-            if raw_row_id.startswith("unit-container-")
-            else raw_row_id
-        ) or unit_match.group(1)
+        # The visible apartment number (for example, #5203) is the stable
+        # resident-facing unit identifier. The row's HTML id (for example,
+        # unit-container-43089391) is only an internal RentCafe identifier.
+        unit_id = unit_match.group(1)
         sqft = int(sqft_match.group(1).replace(",", ""))
         rent_text = cell_texts[2]
         price_min, price_max = _rent_range(rent_text)
@@ -451,6 +449,11 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
                 "application_url": application_url,
                 "floor_plan_id": _query_value(application_url or "", "FloorPlanID") or floor_plan_id,
                 "securecafe_unit_id": _query_value(application_url or "", "UnitID"),
+                "provider_unit_id": (
+                    row.get("id", "")[len("unit-container-"):]
+                    if row.get("id", "").startswith("unit-container-")
+                    else row.get("id", "") or None
+                ),
             }
         )
     if not units:
