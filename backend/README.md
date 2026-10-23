@@ -72,6 +72,9 @@ python3 backend/scripts/inspect_db.py \
   --include-inactive --history
 ```
 
+The inspector now defaults to compact terminal tables. Add `--format json`
+when you need the full machine-readable output.
+
 For ad-hoc SQL, the native SQLite CLI is also useful:
 
 ```bash

@@ -20,12 +20,28 @@ def _decode(row: sqlite3.Row) -> dict:
     return result
 
 
+def _print_table(title: str, rows: list[dict], columns: list[tuple[str, str]]) -> None:
+    print(f"\n{title}")
+    if not rows:
+        print("(none)")
+        return
+    values = [[str(row.get(key) if row.get(key) is not None else "") for key, _ in columns] for row in rows]
+    widths = [max(len(label), *(len(value[index]) for value in values)) for index, (_, label) in enumerate(columns)]
+    header = "  ".join(label.ljust(widths[index]) for index, (_, label) in enumerate(columns))
+    divider = "  ".join("-" * width for width in widths)
+    print(header)
+    print(divider)
+    for value in values:
+        print("  ".join(value[index].ljust(widths[index]) for index in range(len(columns))))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=Path(__file__).resolve().parents[1] / "data" / "rentalassistant.sqlite3")
     parser.add_argument("--building", help="Filter to one building_id")
     parser.add_argument("--include-inactive", action="store_true")
     parser.add_argument("--history", action="store_true", help="Include unit scan_history_json")
+    parser.add_argument("--format", choices=["table", "json"], default="table")
     args = parser.parse_args()
 
     if not args.db.exists():
@@ -54,7 +70,38 @@ def main() -> int:
         for row in inventory:
             row.pop("scan_history_json", None)
 
-    print(json.dumps({"database": str(args.db), "buildings": buildings, "inventory": inventory}, indent=2, ensure_ascii=False))
+    payload = {"database": str(args.db), "buildings": buildings, "inventory": inventory}
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+
+    print(f"Database: {args.db}")
+    _print_table(
+        "Buildings",
+        buildings,
+        [("building_id", "BUILDING"), ("canonical_name", "NAME"), ("provider", "PROVIDER"), ("updated_at", "UPDATED")],
+    )
+    _print_table(
+        "Current inventory",
+        inventory,
+        [
+            ("building_id", "BUILDING"),
+            ("unit_id", "UNIT"),
+            ("floor_plan", "PLAN"),
+            ("beds", "BED"),
+            ("sqft", "SQFT"),
+            ("min_price", "MIN"),
+            ("max_price", "MAX"),
+            ("status", "STATUS"),
+            ("available_date", "AVAILABLE"),
+        ],
+    )
+    if args.history:
+        print("\nScan history")
+        for row in inventory:
+            history = row.get("scan_history_json") or []
+            if history:
+                print(f"{row['building_id']} / {row['unit_id']}: {json.dumps(history, ensure_ascii=False)}")
     return 0
 
 
