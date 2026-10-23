@@ -44,6 +44,33 @@ The database is local generated state and is ignored by Git. A successful scan
 upserts current units; a unit missing from a successful scan becomes
 `inactive`, while its row and history remain available for later comparison.
 
+Inspect the database as readable JSON:
+
+```bash
+python3 backend/scripts/inspect_db.py \
+  --db backend/data/rentalassistant.sqlite3
+
+# One building only, including inactive units and scan history:
+python3 backend/scripts/inspect_db.py \
+  --db backend/data/rentalassistant.sqlite3 \
+  --building 825-south-hill \
+  --include-inactive --history
+```
+
+For ad-hoc SQL, the native SQLite CLI is also useful:
+
+```bash
+sqlite3 backend/data/rentalassistant.sqlite3
+```
+
+```sql
+.headers on
+.mode column
+SELECT building_id, unit_id, floor_plan, min_price, max_price, status, available_date
+FROM inventory
+ORDER BY building_id, min_price;
+```
+
 ## Planned layout
 
 ```text
