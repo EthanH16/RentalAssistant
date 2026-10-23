@@ -379,7 +379,12 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
         cells = row.select("td")
         if len(cells) < 4:
             raise OnniAdapterError("Olympic + Hill unit row is missing required fields")
-        unit_id = row.get("id", "").removeprefix("unit-container-") or _clean(cells[0].get_text(" ")).lstrip("#")
+        raw_row_id = row.get("id", "")
+        unit_id = (
+            raw_row_id[len("unit-container-"):]
+            if raw_row_id.startswith("unit-container-")
+            else raw_row_id
+        ) or _clean(cells[0].get_text(" ")).lstrip("#")
         sqft = _money(_clean(cells[1].get_text(" ")))
         rent_text = _clean(cells[2].get_text(" "))
         price_min, price_max = _rent_range(rent_text)

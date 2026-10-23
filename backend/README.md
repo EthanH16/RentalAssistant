@@ -47,6 +47,9 @@ python3 backend/scripts/scan_onni.py all \
   --db backend/data/rentalassistant.sqlite3
 ```
 
+If your shell is already inside `backend/`, use `--db data/rentalassistant.sqlite3`
+instead; otherwise `backend/data/...` would create an unintended nested path.
+
 The `all` command processes Hope + Flower, Olympic + Hill and 825 South Hill,
 then prints a per-building summary. Successful buildings are committed even
 if another building fails; the command exits non-zero and lists failures so a
