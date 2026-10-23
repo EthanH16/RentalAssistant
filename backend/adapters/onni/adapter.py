@@ -380,9 +380,26 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
     """Parse one Olympic + Hill floorplan page and its actual unit rows."""
 
     soup = BeautifulSoup(html, "html.parser")
-    section = soup.select_one(".floorplan-section")
-    if not section:
+    sections = soup.select(".floorplan-section")
+    if not sections:
         raise OnniAdapterError("Olympic + Hill plan markup not found; refusing to return zero units")
+    page_heading = soup.select_one("h1")
+    expected_plan = _clean(page_heading.get_text(" ")) if page_heading else ""
+    section = next(
+        (
+            candidate
+            for candidate in sections
+            if _clean(candidate.get("data-name") or "").casefold() == expected_plan.casefold()
+        ),
+        None,
+    )
+    if section is None:
+        if len(sections) == 1:
+            section = sections[0]
+        else:
+            raise OnniAdapterError(
+                f"Olympic + Hill page plan mismatch: expected {expected_plan or 'unknown'}"
+            )
     plan_name = _clean(section.get("data-name") or section.select_one("h2").get_text(" "))
     floor_plan_id = section.get("data-id")
     header_text = _clean(section.select_one(".row").get_text(" ") if section.select_one(".row") else "")

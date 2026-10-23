@@ -126,6 +126,23 @@ class OnniAdapterTests(unittest.TestCase):
         self.assertEqual(result["floorplans"][1]["beds"], 2)
         self.assertEqual(result["floorplans"][1]["base_rent_min"], 3500)
 
+    def test_selects_requested_olympic_plan_not_first_similar_plan(self):
+        html = '''
+        <h1>Plan D</h1>
+        <div class="floorplan-section" data-name="Plan A" data-id="a">
+          <div class="row"><h2>Plan A</h2><span>1 Bedroom</span> | <span>1 Bathroom</span></div>
+          <table><tr class="unit-container"><td>#1001</td><td>577</td><td>$2,500</td><td>Available</td><td><a href="/apply?UnitID=1001">Apply</a></td></tr></table>
+        </div>
+        <div class="floorplan-section" data-name="Plan D" data-id="d">
+          <div class="row"><h2>Plan D</h2><span>2 Bedroom</span> | <span>2 Bathroom</span></div>
+          <table><tr class="unit-container"><td>#2001</td><td>862</td><td>$3,500</td><td>Available</td><td><a href="/apply?UnitID=2001">Apply</a></td></tr></table>
+        </div>
+        '''
+        result = parse_olympic_hill_plan_html(html, "https://www.rentolympicandhill.com/floorplans/plan-d")
+        self.assertEqual(result["floor_plan"], "Plan D")
+        self.assertEqual(result["units"][0]["unit_id"], "2001")
+        self.assertEqual(result["units"][0]["beds"], 2)
+
     def test_parses_825_south_hill_shared_availability_rows(self):
         html = '''
         <div class="floorplan__availability__panel js-plan-group" data-cat="2-bed-den">
