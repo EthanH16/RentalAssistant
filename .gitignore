@@ -5,6 +5,7 @@ backend/.venv/
 
 # Generated adapter output and local logs
 backend/output/
+backend/data/
 *.log
 
 # Local/editor/OS files

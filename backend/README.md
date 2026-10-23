@@ -16,6 +16,34 @@ The first milestone intentionally excludes:
 
 The adapter produces inspectable normalized JSON and preserves the provider-source boundary. Persistence and polling can be added without redesigning the provider parser.
 
+## SQLite MVP
+
+The first persistence layer is intentionally two tables:
+
+- `buildings`: one row per approved building, with `fees_json`,
+  `concessions_json` and contact metadata;
+- `inventory`: one current row per `(building_id, unit_id)`, with price,
+  availability, application URL and compact `scan_history_json`.
+
+Run a fixture scan without network access:
+
+```bash
+python3 backend/scripts/scan_onni.py hope-flower \
+  --fixture backend/fixtures/onni/hope-flower-availability.sample.html \
+  --db backend/data/rentalassistant.sqlite3
+```
+
+Run a live scan for any supported Onni building:
+
+```bash
+python3 backend/scripts/scan_onni.py 825-south-hill \
+  --db backend/data/rentalassistant.sqlite3
+```
+
+The database is local generated state and is ignored by Git. A successful scan
+upserts current units; a unit missing from a successful scan becomes
+`inactive`, while its row and history remain available for later comparison.
+
 ## Planned layout
 
 ```text
