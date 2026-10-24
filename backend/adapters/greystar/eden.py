@@ -158,6 +158,90 @@ def _quote_fee_rows(soup: BeautifulSoup) -> list[dict[str, str]]:
     return rows
 
 
+def _unique_text(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _clean(value)
+        if text and text.lower() not in seen:
+            result.append(text)
+            seen.add(text.lower())
+    return result
+
+
+def _quote_specials(pricing: dict[str, Any]) -> list[str]:
+    """Extract lease-specific specials embedded in SecureCafe PricingData."""
+
+    values: list[Any] = []
+    for date_prices in pricing.values():
+        if not isinstance(date_prices, dict):
+            continue
+        for quote in date_prices.values():
+            if not isinstance(quote, dict):
+                continue
+            specials = quote.get("LeasingSpecials")
+            if isinstance(specials, list):
+                values.extend(item for item in specials if item not in (None, ""))
+            for key, value in quote.items():
+                if "special" in str(key).lower() and key != "SpecialAmount":
+                    if isinstance(value, list):
+                        values.extend(item for item in value if item not in (None, ""))
+                    elif value not in (None, "", False, True, 0, 0.0):
+                        values.append(value)
+    return _unique_text(values)
+
+
+def _page_specials(soup: BeautifulSoup) -> list[str]:
+    """Extract specials already rendered in an official page response."""
+
+    values: list[Any] = []
+    # SecureCafe ships empty special-card placeholders and generic copy such
+    # as "Special Offer" in the HTML template. Only preserve actual offer
+    # nodes populated with offer text; the PricingData path handles structured
+    # unit specials separately.
+    for element in soup.select("p.special-offer, div.special-offer, span.special-offer"):
+        text = _clean(element.get_text(" "))
+        if text:
+            values.append(text)
+    return _unique_text(values)
+
+
+def _marketing_concessions(page_html: str, payload: dict[str, Any] | None = None) -> list[str]:
+    """Find building-level promotion copy in rendered text or embedded JSON.
+
+    This is deliberately text-only. It preserves the advertised wording and
+    does not infer a dollar value or eligibility from a marketing phrase.
+    """
+
+    soup = BeautifulSoup(page_html, "html.parser")
+    values: list[Any] = _page_specials(soup)
+    visible_text = _clean(soup.get_text(" "))
+    patterns = (
+        r"[^.]{0,160}(?:up to\s+\d+\s+(?:weeks?|months?)\s+free|\d+\s+(?:weeks?|months?)\s+free)[^.]{0,220}",
+        r"[^.]{0,160}(?:free\s+parking|parking\s+free|look\s*(?:&|and)\s*lease)[^.]{0,220}",
+        r"[^.]{0,160}(?:special\s+offer|limited[- ]time\s+offer|concession)[^.]{0,220}",
+    )
+    for pattern in patterns:
+        values.extend(match.group(0) for match in re.finditer(pattern, visible_text, re.I))
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if any(token in str(key).lower() for token in ("special", "offer", "promotion", "concession")):
+                    if isinstance(child, (str, int, float)) and not isinstance(child, bool):
+                        values.append(child)
+                    elif isinstance(child, list):
+                        values.extend(item for item in child if isinstance(item, (str, int, float)) and not isinstance(item, bool))
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    if payload is not None:
+        walk(payload)
+    return _unique_text(values)
+
+
 def parse_quote_html(
     html: str,
     source_url: str,
@@ -190,6 +274,9 @@ def parse_quote_html(
     )
     total_hidden = _as_float(_hidden_value(soup, "TotalRent"))
     selected_date_iso = _iso_date(_hidden_value(soup, "dtMIDateSel") or selected_key)
+    quote_specials = _quote_specials(pricing)
+    rendered_specials = _page_specials(soup)
+    concessions = _unique_text(quote_specials + rendered_specials)
     return {
         "provider": "greystar",
         "building_id": BUILDING_ID,
@@ -207,6 +294,8 @@ def parse_quote_html(
         "total_monthly_price": round(total_hidden if total_hidden is not None else (base_rent or 0) + recurring_addons, 2),
         "application_cost": _as_float(_hidden_value(soup, "ApplicationFee")),
         "fee_rows": _quote_fee_rows(soup),
+        "concessions": concessions,
+        "concession_scope": "unit_or_lease_quote" if quote_specials else ("official_quote_page" if rendered_specials else None),
         "term_quotes": [
             {
                 "lease_term_months": int(key),
@@ -222,6 +311,8 @@ def parse_quote_html(
         "warnings": [
             "Quote is read-only and does not submit an application.",
             "Total Monthly Leasing Price includes fees exposed by SecureCafe; optional selections and required move-in/move-out charges may be excluded.",
+            "No unit-level concession was returned in this SecureCafe quote; a separate building marketing offer may still require eligibility confirmation."
+            if not concessions else "Concession text is preserved separately from rent and must be checked for lease-term, move-in-date, and unit eligibility.",
         ],
     }
 
@@ -344,11 +435,7 @@ def parse_floorplans_html(page_html: str, source_url: str = FLOORPLANS_URL) -> d
     pet_match = re.search(r"we welcome both cats and dogs.*?(?=</p>|\n|$)", page_html, re.I | re.S)
     if pet_match:
         pet_policy = _clean(re.sub(r"<[^>]+>", " ", pet_match.group(0)))
-    concessions: list[str] = []
-    for match in re.finditer(r"[^<]{0,120}(?:weeks?\s+free|look\s*&?\s*lease)[^<]{0,240}", page_html, re.I):
-        value = _clean(re.sub(r"<[^>]+>", " ", match.group(0)))
-        if value and value not in concessions:
-            concessions.append(value)
+    concessions = _marketing_concessions(page_html, payload)
     fees: list[dict[str, Any]] = []
     if pet_policy:
         fees.append({"type": "pet_policy", "text": pet_policy, "source": source_url})

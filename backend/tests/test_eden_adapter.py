@@ -47,6 +47,25 @@ class EdenAdapterTests(unittest.TestCase):
         self.assertTrue(unit["available_now"])
         self.assertEqual(unit["application_url"], "https://apply.example.test/")
 
+    def test_preserves_building_marketing_concession_text(self):
+        payload = {
+            "config": {"settings": {}},
+            "floorplans": [],
+            "units": [{
+                "id": "unit-abc", "apartment_number": "#101", "bedrooms": "0",
+                "rent_min": "2200", "rent_max": "2200",
+                "specials": ["Up to 6 Weeks Free"],
+            }],
+        }
+        html = (
+            "<div>Up to 6 Weeks Free plus Free Parking for two months.</div>"
+            '<script id="jd-fp-data-script-app" type="application/json">'
+            + json.dumps(payload) + "</script>"
+        )
+        result = parse_floorplans_html(html)
+        self.assertIn("Up to 6 Weeks Free", result["policies"]["concessions"])
+        self.assertTrue(any("Free Parking for two months" in item for item in result["policies"]["concessions"]))
+
     def test_fails_closed_without_embedded_payload(self):
         with self.assertRaises(Exception):
             parse_floorplans_html("<html></html>")
@@ -96,6 +115,23 @@ class EdenAdapterTests(unittest.TestCase):
         self.assertEqual(result["total_monthly_price"], 2597.83)
         self.assertEqual(len(result["term_quotes"]), 2)
         self.assertEqual(result["fee_rows"][2]["label"], "Rent")
+
+    def test_preserves_securecafe_lease_specials(self):
+        html = '''
+        <div id="LeaseInfoSummary"><table><tr><td>Rent</td><td>$2,500.00</td></tr></table></div>
+        <input id="dtMIDateSel" value="11/4/2026"><input id="sLeaseTerm" value="15">
+        <input id="MonthlyOtherRent" value="0"><input id="TotalRent" value="2500">
+        <script>var PricingData = {
+          "11/4/2026": {
+            "15": {"price": 2500.0, "Tax": 0.0, "EMCBasePrice": 2500.0,
+                    "bSpecial": true, "LeasingSpecials": ["Up to 6 Weeks Free"], "SpecialAmount": 0.0}
+          }
+        };</script>
+        <p class="special-offer">Two months free parking</p>
+        '''
+        result = parse_quote_html(html, "https://secure.example/quote", "2026-11-04", 15)
+        self.assertEqual(result["concessions"], ["Up to 6 Weeks Free", "Two months free parking"])
+        self.assertEqual(result["concession_scope"], "unit_or_lease_quote")
 
 
 if __name__ == "__main__":
