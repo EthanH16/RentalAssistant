@@ -25,6 +25,30 @@ quotes, and the page's Total Monthly Leasing Price. The adapter lives in
 `adapters/greystar/eden.py` and preserves both the total monthly price and the
 base-rent reference in its normalized JSON output.
 
+The Eden also has a separate ad-hoc quote path. It follows the official unit
+page into the SecureCafe lease handoff, selects a requested move-in date and
+lease term, and parses the returned base rent, recurring charges, total
+monthly price, fee rows, and all term quotes for that date. It is deliberately
+read-only and does not write SQLite or alter the broad inventory scan:
+
+```bash
+python3 backend/scripts/run_eden_quote.py \
+  --unit-number 330 \
+  --move-in-date 2026-11-04 \
+  --lease-term 12
+
+# Or use the provider's current public unit slug directly:
+python3 backend/scripts/run_eden_quote.py \
+  --unit-slug 4b96b2f8e68ffda712c2e826356d6d21 \
+  --move-in-date 2026-11-04 \
+  --lease-term 12
+```
+
+The unit-number form performs a fresh broad inventory lookup first, then uses
+the matching public unit page. The quote response is suitable for an
+on-demand client comparison; it is not a substitute for the persisted
+building-level fees/concessions or the current inventory table.
+
 The first milestone intentionally excludes:
 
 - scheduled polling;
