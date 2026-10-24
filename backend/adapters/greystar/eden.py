@@ -21,6 +21,7 @@ FLOORPLANS_URL = "https://edendtla.com/floorplans/"
 PHONE = "877-680-8826"
 RENDERABLE_ENDPOINT = "_fp-renderable"
 POPDOWN_ENDPOINT = "https://edendtla.com/popdown/get.php"
+EXPENSE_GUIDE_HOST = "https://greystar.expenseguide.com/"
 
 
 class EdenAdapterError(RuntimeError):
@@ -256,6 +257,27 @@ def _marketing_concessions(page_html: str, payload: dict[str, Any] | None = None
     return _unique_text(values)
 
 
+def _fee_guide_reference(page_html: str, source_url: str) -> dict[str, Any] | None:
+    """Read the building-page fee-guide widget reference, if present."""
+
+    match = re.search(
+        r"EngrainExpenseEmbed\s*\(\s*\{.*?assetId\s*:\s*['\"]([^'\"]+)['\"].*?\}\s*\)",
+        page_html,
+        re.I | re.S,
+    )
+    if not match:
+        return None
+    return {
+        "provider": "engrain_expense_guide",
+        "asset_id": match.group(1),
+        "source_url": source_url,
+        "widget_url": EXPENSE_GUIDE_HOST,
+        "fees": [],
+        "status": "reference_detected_data_not_embedded",
+        "note": "The building page loads the fee schedule through an external widget; fee rows must be fetched from that widget separately from unit quotes.",
+    }
+
+
 def parse_quote_html(
     html: str,
     source_url: str,
@@ -464,6 +486,7 @@ def parse_floorplans_html(
         "text": "Total Monthly Leasing Price includes base rent, mandatory monthly fees and selected optional fees; variable/usage-based fees and required move-in or move-out charges may be excluded.",
         "source": source_url,
     })
+    fee_guide = _fee_guide_reference(page_html, source_url)
     return {
         "provider": "greystar",
         "building_id": BUILDING_ID,
@@ -472,7 +495,7 @@ def parse_floorplans_html(
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "status": "ok",
         "units": units,
-        "policies": {"fees": fees, "concessions": concessions},
+        "policies": {"fees": fees, "concessions": concessions, "fee_guide": fee_guide},
         "contact": {"phone": PHONE, "website": OFFICIAL_URL},
         "floorplans_count": len(payload.get("floorplans") or []),
         "units_count": len(units),

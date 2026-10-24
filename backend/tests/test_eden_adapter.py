@@ -66,6 +66,26 @@ class EdenAdapterTests(unittest.TestCase):
         self.assertIn("Up to 6 Weeks Free", result["policies"]["concessions"])
         self.assertTrue(any("Free Parking for two months" in item for item in result["policies"]["concessions"]))
 
+    def test_records_building_fee_guide_reference_separately(self):
+        payload = {
+            "config": {"settings": {}},
+            "floorplans": [],
+            "units": [{"id": "unit-abc", "apartment_number": "#101", "bedrooms": "0", "rent_min": "2200", "rent_max": "2200"}],
+        }
+        html = (
+            "<div id='floorplans-fee-guide'>"
+            "<script id='engrain-expense-embed'>"
+            "JonahWidget.engrainExpenseEmbed({import: 'https://greystar.expenseguide.com/js/api-v1.min.js', assetId: '27664'})"
+            "</script></div>"
+            '<script id="jd-fp-data-script-app" type="application/json">'
+            + json.dumps(payload) + "</script>"
+        )
+        result = parse_floorplans_html(html, "https://edendtla.com/floorplans/")
+        guide = result["policies"]["fee_guide"]
+        self.assertEqual(guide["asset_id"], "27664")
+        self.assertEqual(guide["fees"], [])
+        self.assertEqual(guide["status"], "reference_detected_data_not_embedded")
+
     def test_fails_closed_without_embedded_payload(self):
         with self.assertRaises(Exception):
             parse_floorplans_html("<html></html>")
