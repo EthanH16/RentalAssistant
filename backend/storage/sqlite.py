@@ -87,10 +87,13 @@ def _state(unit: dict[str, Any], status: str) -> dict[str, Any]:
         "available_date": unit.get("available_date"),
         "status": status,
         "application_url": unit.get("application_url"),
+        "pricing_status": unit.get("pricing_status"),
     }
 
 
 def _status(unit: dict[str, Any]) -> str:
+    if unit.get("pricing_status") == "call_for_pricing":
+        return "needs_review"
     if unit.get("available_now"):
         return "available"
     if unit.get("available_date"):

@@ -6,9 +6,20 @@ This folder is reserved for the backend and provider adapters that will eventual
 
 The first implementation target is the **Onni provider**, using **Hope + Flower** as the first building. **825 South Hill** is now validated against the same server-rendered availability shape. Olympic + Hill is also validated; it uses the same provider family but publishes unit rows on linked plan pages rather than directly on the floorplan index.
 
+Park Fifth is the first non-Onni adapter target. Its Bozzuto-managed public floor-plan page publishes server-rendered inventory cards, pagination, total monthly leasing price, base rent, availability date, and a public fee table. The adapter lives in `adapters/bozzuto/park_fifth.py` and writes to the same normalized SQLite schema.
+
+Related is the next provider-level adapter. The Grand by Gehry, Top of The Grand, and The Emerson share Related's property-filtered search and unit-detail pattern. The adapter lives in `adapters/related/adapter.py`; it uses the search page for discovery and follows official unit pages for resident-facing apartment numbers and application URLs.
+
+Beaudry is the first Brookfield/LyvWell adapter. The current Beaudry site is
+LyvWell-branded and loads the full live inventory from the official
+`/wp-json/middleware/v1/getUnits/` endpoint. The adapter lives in
+`adapters/brookfield/beaudry.py`; it captures resident-facing apartment
+numbers, floor plans, total monthly leasing price, base-rent references,
+availability dates, specials, and the structured fee payload returned by the
+official endpoint. The first live scan found 74 units.
+
 The first milestone intentionally excludes:
 
-- SQLite or another database;
 - scheduled polling;
 - client-facing recommendations;
 - writing dynamic inventory into the Vault;
@@ -44,6 +55,21 @@ Scan every currently supported Onni building in one run:
 
 ```bash
 python3 backend/scripts/scan_onni.py all \
+  --db backend/data/rentalassistant.sqlite3
+
+# Park Fifth / Bozzuto
+python3 backend/scripts/run_park_fifth.py
+python3 backend/scripts/scan_park_fifth.py \
+  --db backend/data/rentalassistant.sqlite3
+
+# Related / The Grand, Top of The Grand, or The Emerson
+python3 backend/scripts/run_related.py grand-residences --summary
+python3 backend/scripts/scan_related.py grand-residences \
+  --db backend/data/rentalassistant.sqlite3
+
+# Brookfield / LyvWell / Beaudry
+python3 backend/scripts/run_beaudry.py --summary
+python3 backend/scripts/scan_beaudry.py \
   --db backend/data/rentalassistant.sqlite3
 ```
 

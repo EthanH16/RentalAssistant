@@ -233,8 +233,20 @@ def parse_onni_availability_html(
                 raise OnniAdapterError("Availability row is missing required fields")
             apply_link = row.select_one("a[href]")
             application_url = urljoin(source_url, apply_link.get("href")) if apply_link else None
-            price_min = _money(row.get("data-rent-min"))
-            price_max = _money(row.get("data-rent-max"))
+            raw_price_min = row.get("data-rent-min")
+            raw_price_max = row.get("data-rent-max")
+            price_min = _money(raw_price_min)
+            price_max = _money(raw_price_max)
+            pricing_status = "priced"
+            # Onni/RentCafe uses -1 (and, on some pages, 1) as a placeholder
+            # when a real rent is not published. Never expose that sentinel as
+            # a valid asking rent in downstream matching.
+            if any(
+                value is not None and str(value).strip() in {"-1", "0", "1"}
+                for value in (raw_price_min, raw_price_max)
+            ):
+                price_min = price_max = None
+                pricing_status = "call_for_pricing"
             sqft_match = re.search(r"([0-9,]+)\s*sqft", fields[2], re.I)
             status = fields[3]
             available_date = _date_from_status(status)
@@ -250,6 +262,7 @@ def parse_onni_availability_html(
                 "sqft": int(sqft_match.group(1).replace(",", "")) if sqft_match else None,
                 "base_rent_min": price_min,
                 "base_rent_max": price_max,
+                "pricing_status": pricing_status,
                 "screening_base_rent": price_min,
                 "status": "available" if status.lower() == "available" else status,
                 "status_raw": status,
