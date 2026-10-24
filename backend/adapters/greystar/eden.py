@@ -9,7 +9,7 @@ import http.cookiejar
 import json
 import re
 from typing import Any
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from bs4 import BeautifulSoup
@@ -20,6 +20,7 @@ OFFICIAL_URL = "https://edendtla.com/"
 FLOORPLANS_URL = "https://edendtla.com/floorplans/"
 PHONE = "877-680-8826"
 RENDERABLE_ENDPOINT = "_fp-renderable"
+POPDOWN_ENDPOINT = "https://edendtla.com/popdown/get.php"
 
 
 class EdenAdapterError(RuntimeError):
@@ -224,14 +225,27 @@ def _marketing_concessions(page_html: str, payload: dict[str, Any] | None = None
     for pattern in patterns:
         values.extend(match.group(0) for match in re.finditer(pattern, visible_text, re.I))
 
+    def is_promotion_text(value: Any) -> bool:
+        text = _clean(value)
+        return bool(re.search(
+            r"(?:free|look\s*(?:&|and)\s*lease|special\s+offer|concession|promotion)",
+            text,
+            re.I,
+        ))
+
     def walk(value: Any) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
                 if any(token in str(key).lower() for token in ("special", "offer", "promotion", "concession")):
-                    if isinstance(child, (str, int, float)) and not isinstance(child, bool):
+                    if isinstance(child, (str, int, float)) and not isinstance(child, bool) and is_promotion_text(child):
                         values.append(child)
                     elif isinstance(child, list):
-                        values.extend(item for item in child if isinstance(item, (str, int, float)) and not isinstance(item, bool))
+                        values.extend(
+                            item for item in child
+                            if isinstance(item, (str, int, float))
+                            and not isinstance(item, bool)
+                            and is_promotion_text(item)
+                        )
                 walk(child)
         elif isinstance(value, list):
             for child in value:
@@ -423,7 +437,11 @@ def _unit(raw: dict[str, Any], application_url: str | None) -> dict[str, Any]:
     }
 
 
-def parse_floorplans_html(page_html: str, source_url: str = FLOORPLANS_URL) -> dict[str, Any]:
+def parse_floorplans_html(
+    page_html: str,
+    source_url: str = FLOORPLANS_URL,
+    marketing_html: str | None = None,
+) -> dict[str, Any]:
     payload = _extract_json_script(page_html)
     settings = payload.get("config", {}).get("settings", {})
     application_url = settings.get("lease_url") or settings.get("apply_url")
@@ -436,6 +454,8 @@ def parse_floorplans_html(page_html: str, source_url: str = FLOORPLANS_URL) -> d
     if pet_match:
         pet_policy = _clean(re.sub(r"<[^>]+>", " ", pet_match.group(0)))
     concessions = _marketing_concessions(page_html, payload)
+    if marketing_html:
+        concessions = _unique_text(concessions + _marketing_concessions(marketing_html))
     fees: list[dict[str, Any]] = []
     if pet_policy:
         fees.append({"type": "pet_policy", "text": pet_policy, "source": source_url})
@@ -459,7 +479,7 @@ def parse_floorplans_html(page_html: str, source_url: str = FLOORPLANS_URL) -> d
         "warnings": [
             "Eden card prices are the official Total Monthly Leasing Price; base-rent references and all lease-term quotes are preserved per unit.",
             "Prices, availability, fees, and promotions can change without notice.",
-            "No current public concession banner was detected on the official floorplans page during this scan." if not concessions else "Concessions are preserved as page text and should be rechecked before quoting a client.",
+            "No current public concession banner was detected on the official pages during this scan." if not concessions else "Concessions are preserved as official marketing text and should be rechecked for eligibility before quoting a client.",
         ],
     }
 
@@ -482,6 +502,42 @@ class EdenAdapter:
             if response.headers.get_content_type() not in {"text/html", "application/xhtml+xml"}:
                 raise EdenAdapterError("The Eden official page did not return HTML")
             return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+
+    def fetch_homepage_popdown(self) -> str | None:
+        """Fetch the homepage's public promotion banner payload.
+
+        Eden loads this banner asynchronously from /popdown/get.php, so it is
+        not present in the raw homepage HTML returned by a normal GET.
+        """
+
+        form = urlencode({
+            "page": "/",
+            "ua": self.user_agent,
+            "asyncData": json.dumps({
+                "accent_color": "b86636",
+                "dark_palette_color": "68765a",
+                "light_palette_color": "ffffff",
+            }),
+            "query": "",
+        }).encode()
+        request = Request(
+            POPDOWN_ENDPOINT,
+            data=form,
+            headers={
+                "User-Agent": self.user_agent,
+                "Referer": OFFICIAL_URL,
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode(response.headers.get_content_charset() or "utf-8", "replace"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        return payload.get("html") if isinstance(payload, dict) and isinstance(payload.get("html"), str) else None
 
     def _request_html(
         self,
@@ -577,4 +633,10 @@ class EdenAdapter:
         return result
 
     def fetch(self) -> dict[str, Any]:
-        return parse_floorplans_html(self.fetch_html(), FLOORPLANS_URL)
+        floorplans_html = self.fetch_html(FLOORPLANS_URL)
+        # Eden's current promotion is displayed in the homepage pop-down
+        # banner, not in the floorplans app payload or raw homepage HTML.
+        # Keep inventory sourced from /floorplans/ but merge the asynchronous
+        # homepage marketing text into the building-level policy result.
+        popdown_html = self.fetch_homepage_popdown()
+        return parse_floorplans_html(floorplans_html, FLOORPLANS_URL, popdown_html)
