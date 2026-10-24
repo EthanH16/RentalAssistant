@@ -18,6 +18,13 @@ numbers, floor plans, total monthly leasing price, base-rent references,
 availability dates, specials, and the structured fee payload returned by the
 official endpoint. The first live scan found 74 units.
 
+The Eden is the first Greystar adapter. Its official floorplans page embeds a
+structured JSON application state block with resident-facing unit numbers,
+floor plans, availability, the selected lease-term price, all available term
+quotes, and the page's Total Monthly Leasing Price. The adapter lives in
+`adapters/greystar/eden.py` and preserves both the total monthly price and the
+base-rent reference in its normalized JSON output.
+
 The first milestone intentionally excludes:
 
 - scheduled polling;
@@ -70,6 +77,11 @@ python3 backend/scripts/scan_related.py grand-residences \
 # Brookfield / LyvWell / Beaudry
 python3 backend/scripts/run_beaudry.py --summary
 python3 backend/scripts/scan_beaudry.py \
+  --db backend/data/rentalassistant.sqlite3
+
+# Greystar / The Eden
+python3 backend/scripts/run_eden.py
+python3 backend/scripts/scan_eden.py \
   --db backend/data/rentalassistant.sqlite3
 
 # All currently supported direct-partnership buildings

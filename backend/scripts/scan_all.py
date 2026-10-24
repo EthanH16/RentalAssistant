@@ -24,6 +24,7 @@ from adapters.bozzuto import ParkFifthAdapter  # noqa: E402
 from adapters.brookfield import BeaudryAdapter  # noqa: E402
 from adapters.onni import BUILDINGS as ONNI_BUILDINGS, OnniAdapter  # noqa: E402
 from adapters.related import BUILDINGS as RELATED_BUILDINGS, RelatedAdapter  # noqa: E402
+from adapters.greystar import EdenAdapter  # noqa: E402
 from storage.sqlite import InventoryDatabase  # noqa: E402
 
 
@@ -43,6 +44,10 @@ def _fetch_related(building_id: str) -> dict[str, Any]:
     return RelatedAdapter().fetch(building_id)
 
 
+def _fetch_eden(_: str) -> dict[str, Any]:
+    return EdenAdapter().fetch()
+
+
 Job = tuple[str, str, Callable[[str], dict[str, Any]]]
 
 
@@ -54,6 +59,7 @@ def _jobs() -> dict[str, Job]:
     jobs["beaudry"] = ("brookfield", "beaudry", _fetch_beaudry)
     for building_id in RELATED_BUILDINGS:
         jobs[building_id] = ("related", building_id, _fetch_related)
+    jobs["the-eden"] = ("greystar", "the-eden", _fetch_eden)
     return jobs
 
 
@@ -62,12 +68,16 @@ def _official_url(building_id: str, result: dict[str, Any]) -> str | None:
         return "https://www.parkfifthtower.com/floor-plans/"
     if building_id in RELATED_BUILDINGS:
         return RELATED_BUILDINGS[building_id].detail_url
+    if building_id == "the-eden":
+        return "https://edendtla.com/floorplans/"
     return result.get("source_url")
 
 
 def _contact(building_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
     if building_id == "park-fifth":
         return {"leasing": "parkfifth@bozzutoliving.com", "phone": "877-540-0401"}
+    if building_id == "the-eden":
+        return result.get("contact")
     return result.get("contact")
 
 
