@@ -71,7 +71,16 @@ python3 backend/scripts/scan_related.py grand-residences \
 python3 backend/scripts/run_beaudry.py --summary
 python3 backend/scripts/scan_beaudry.py \
   --db backend/data/rentalassistant.sqlite3
+
+# All currently supported direct-partnership buildings
+python3 backend/scripts/scan_all.py \
+  --db backend/data/rentalassistant.sqlite3
 ```
+
+`scan_all.py` fetches buildings concurrently, writes SQLite sequentially, and
+continues scanning if one official site fails. Use `--workers 2` or `--workers
+1` if a provider rate-limits requests. Use repeated `--building BUILDING_ID`
+arguments to run a subset.
 
 If your shell is already inside `backend/`, use `--db data/rentalassistant.sqlite3`
 instead; otherwise `backend/data/...` would create an unintended nested path.
