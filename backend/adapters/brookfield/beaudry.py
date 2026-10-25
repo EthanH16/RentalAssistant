@@ -15,6 +15,8 @@ from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from bs4 import BeautifulSoup
+
 
 class BeaudryAdapterError(RuntimeError):
     """Raised when Beaudry's public inventory response is not trustworthy."""
@@ -22,6 +24,7 @@ class BeaudryAdapterError(RuntimeError):
 
 BUILDING_ID = "beaudry"
 AVAILABILITY_URL = "https://lyvwellapartments.com/our-communities/beaudry/availabilities/"
+FEE_GUIDE_URL = "https://lyvwellapartments.com/our-communities/beaudry/fee-guide/"
 API_URL = "https://lyvwellapartments.com/wp-json/middleware/v1/getUnits/"
 PROPERTY_ID = "1782290"
 APPLICATION_URL = (
@@ -107,6 +110,72 @@ def _dedupe_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _clean(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def parse_fee_guide_html(html: str, source_url: str = FEE_GUIDE_URL) -> dict[str, Any]:
+    """Parse Beaudry's official fee guide, including collapsed sections.
+
+    The page renders both desktop and mobile copies of each table.  The
+    desktop tables are used as the canonical copy so fees are not duplicated.
+    """
+
+    soup = BeautifulSoup(html, "html.parser")
+    wrapper = None
+    for candidate in soup.select(".fee-guide-wrapper"):
+        heading = _clean(candidate.find(["h2", "h3", "h4", "h5"]).get_text(" ") if candidate.find(["h2", "h3", "h4", "h5"]) else "")
+        if "beaudry" in heading.lower():
+            wrapper = candidate
+            break
+    if wrapper is None:
+        raise BeaudryAdapterError("Beaudry fee guide section was not found")
+
+    fees: list[dict[str, Any]] = []
+    sections: list[str] = []
+    for table in wrapper.select("table.desktop-fee-table"):
+        section_item = table.find_parent(class_="fee-item")
+        section = _clean(section_item.find(["h2", "h3", "h4", "h5"]).get_text(" ") if section_item and section_item.find(["h2", "h3", "h4", "h5"]) else "")
+        if section and section not in sections:
+            sections.append(section)
+        for row in table.select("tbody tr"):
+            cells = row.select("td")
+            if len(cells) < 3:
+                continue
+            raw_name = _clean(cells[0].get_text(" "))
+            if not raw_name:
+                continue
+            has_footnote = raw_name.endswith("*")
+            name = raw_name.rstrip("*").strip()
+            frequency = _clean(cells[1].get_text(" "))
+            amount = _clean(cells[2].get_text(" "))
+            included = bool(cells[3].select_one(".check-circle")) if len(cells) >= 4 else False
+            fees.append({
+                "name": name,
+                "amount": amount,
+                "type": frequency,
+                "timing": frequency,
+                "category": section or None,
+                "required": section != "Optional Fees",
+                "included_in_total_monthly_leasing_price": included,
+                "has_footnote": has_footnote,
+                "source": "official_fee_guide",
+            })
+
+    if not fees:
+        raise BeaudryAdapterError("Beaudry fee guide contained no fee rows")
+    description = _clean(wrapper.select_one(".fee-guide-description").get_text(" ") if wrapper.select_one(".fee-guide-description") else "")
+    return {
+        "status": "parsed",
+        "source_url": source_url,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "sections": sections,
+        "fees": _dedupe_records(fees),
+        "description": description,
+        "ground_truth": True,
+    }
+
+
 def _unit(raw: dict[str, Any]) -> dict[str, Any]:
     apartment = str(raw.get("apartmentName") or raw.get("apartmentId") or "").strip()
     if not apartment:
@@ -179,6 +248,19 @@ class BeaudryAdapter:
             except json.JSONDecodeError as exc:
                 raise BeaudryAdapterError("Beaudry inventory endpoint did not return JSON") from exc
 
+    def fetch_html(self, url: str) -> str:
+        request = Request(
+            url,
+            headers={"User-Agent": self.user_agent, "Accept": "text/html,application/xhtml+xml,*/*"},
+        )
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            if response.status != 200:
+                raise BeaudryAdapterError(f"Beaudry fee guide returned HTTP {response.status}")
+            return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+
+    def fetch_fee_guide(self) -> dict[str, Any]:
+        return parse_fee_guide_html(self.fetch_html(FEE_GUIDE_URL))
+
     def fetch(self) -> dict[str, Any]:
         query = urlencode([
             ("propertyId[]", PROPERTY_ID),
@@ -197,7 +279,7 @@ class BeaudryAdapter:
         if len({u["unit_id"] for u in units}) != len(units):
             raise BeaudryAdapterError("Beaudry returned duplicate resident-facing apartment numbers")
 
-        fees = _dedupe_records([fee for unit in units for fee in unit.pop("fees", [])])
+        inventory_fees = _dedupe_records([fee for unit in units for fee in unit.pop("fees", [])])
         concessions = sorted({u.pop("special") for u in units if u.get("special")})
         required_monthly = sorted({u.pop("required_monthly_fee_reference") for u in units if u.get("required_monthly_fee_reference") is not None})
         base_references = {
@@ -206,6 +288,23 @@ class BeaudryAdapter:
         }
         for unit in units:
             unit["detail_checked"] = False
+
+        fee_guide_error = None
+        try:
+            fee_guide = self.fetch_fee_guide()
+            fees = fee_guide["fees"]
+        except Exception as exc:
+            # Do not silently downgrade to the inventory API's partial fee
+            # metadata.  The official fee guide is Beaudry's fee ground truth.
+            fee_guide = {
+                "status": "fetch_failed",
+                "source_url": FEE_GUIDE_URL,
+                "ground_truth": True,
+                "fees": [],
+                "error": str(exc),
+            }
+            fee_guide_error = str(exc)
+            fees = []
 
         return {
             "provider": "brookfield",
@@ -218,6 +317,8 @@ class BeaudryAdapter:
             "units": units,
             "policies": {
                 "fees": fees,
+                "inventory_api_fees": inventory_fees,
+                "fee_guide": fee_guide,
                 "concessions": concessions,
                 "required_monthly_fee_reference": required_monthly,
                 "base_rent_reference": base_references,
@@ -230,7 +331,7 @@ class BeaudryAdapter:
                 "application_url": APPLICATION_URL,
             },
             "endpoint": endpoint,
-            "warnings": [
+            "warnings": ([f"Official Beaudry fee guide unavailable: {fee_guide_error}"] if fee_guide_error else []) + [
                 "Availability, pricing, fees, and specials can change without notice.",
                 "The official site states that optional pet/parking charges and variable utilities are not included in Total Monthly Leasing Price.",
             ],
