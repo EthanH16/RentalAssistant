@@ -84,7 +84,27 @@ class EdenAdapterTests(unittest.TestCase):
         guide = result["policies"]["fee_guide"]
         self.assertEqual(guide["asset_id"], "27664")
         self.assertEqual(guide["fees"], [])
-        self.assertEqual(guide["status"], "reference_detected_data_not_embedded")
+        self.assertEqual(guide["status"], "widget_reference_only")
+
+    def test_parses_rendered_building_fee_guide_rows(self):
+        payload = {
+            "config": {"settings": {}},
+            "floorplans": [],
+            "units": [{"id": "unit-abc", "apartment_number": "#101", "bedrooms": "0", "rent_min": "2200", "rent_max": "2200"}],
+        }
+        html = (
+            "<div id='floorplans-fee-guide'><h5>Easy-to-Use Guide</h5><p>Potential fees.</p>"
+            "<table><tr><th>Fee</th><th>Amount</th></tr>"
+            "<tr><td>Pest Control</td><td>$1.62 / mo</td></tr>"
+            "<tr><td>SCEP Fee</td><td>$2.83 / mo</td></tr></table></div>"
+            '<script id="jd-fp-data-script-app" type="application/json">'
+            + json.dumps(payload) + "</script>"
+        )
+        result = parse_floorplans_html(html, "https://edendtla.com/floorplans/")
+        guide = result["policies"]["fee_guide"]
+        self.assertEqual(guide["status"], "parsed")
+        self.assertEqual(guide["fees"][0]["label"], "Pest Control")
+        self.assertTrue(any(item.get("label") == "SCEP Fee" for item in result["policies"]["fees"]))
 
     def test_fails_closed_without_embedded_payload(self):
         with self.assertRaises(Exception):

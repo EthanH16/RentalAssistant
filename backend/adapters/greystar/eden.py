@@ -257,25 +257,87 @@ def _marketing_concessions(page_html: str, payload: dict[str, Any] | None = None
     return _unique_text(values)
 
 
+def _fee_guide_rows(page_html: str) -> list[dict[str, str]]:
+    """Parse fee rows rendered inside Eden's building-level fee guide.
+
+    The official page currently mounts these rows asynchronously. This parser
+    handles both a server/rendered table and the common card/data-attribute
+    shapes used by the widget, while intentionally ignoring SecureCafe quote
+    markup elsewhere in the document.
+    """
+
+    soup = BeautifulSoup(page_html, "html.parser")
+    guide = soup.select_one("#floorplans-fee-guide")
+    if not guide:
+        return []
+    for element in guide.select("script, style, noscript"):
+        element.decompose()
+
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(label: Any, value: Any, category: Any = None) -> None:
+        label_text = _clean(label)
+        value_text = _clean(value)
+        if not label_text or not value_text or label_text.lower() in {"fee", "item", "name"}:
+            return
+        key = (label_text.lower(), value_text.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        row = {"label": label_text, "value": value_text, "source": "building_fee_guide"}
+        if _clean(category):
+            row["category"] = _clean(category)
+        rows.append(row)
+
+    for table_row in guide.select("tr"):
+        cells = [_clean(cell.get_text(" ")) for cell in table_row.select("th, td")]
+        if len(cells) >= 2:
+            add(cells[0], cells[1])
+
+    # Support widget cards that expose semantic attributes instead of a table.
+    for element in guide.select("[data-fee-name], [data-expense-name], [data-fee-label]"):
+        label = element.get("data-fee-name") or element.get("data-expense-name") or element.get("data-fee-label")
+        value = element.get("data-fee-value") or element.get("data-expense-value") or element.get("data-value")
+        if value:
+            add(label, value, element.get("data-category") or element.get("data-fee-category"))
+
+    return rows
+
+
 def _fee_guide_reference(page_html: str, source_url: str) -> dict[str, Any] | None:
-    """Read the building-page fee-guide widget reference, if present."""
+    """Read the building-page fee-guide section and widget reference."""
+
+    soup = BeautifulSoup(page_html, "html.parser")
+    section = soup.select_one("#floorplans-fee-guide")
+    if not section:
+        return None
+    title = section.select_one("h1, h2, h3, h4, h5, h6")
+    description = section.select_one("p")
+    rows = _fee_guide_rows(page_html)
 
     match = re.search(
         r"EngrainExpenseEmbed\s*\(\s*\{.*?assetId\s*:\s*['\"]([^'\"]+)['\"].*?\}\s*\)",
         page_html,
         re.I | re.S,
     )
-    if not match:
-        return None
-    return {
+    guide: dict[str, Any] = {
         "provider": "engrain_expense_guide",
-        "asset_id": match.group(1),
         "source_url": source_url,
         "widget_url": EXPENSE_GUIDE_HOST,
-        "fees": [],
-        "status": "reference_detected_data_not_embedded",
-        "note": "The building page loads the fee schedule through an external widget; fee rows must be fetched from that widget separately from unit quotes.",
+        "section_title": _clean(title.get_text(" ")) if title else "Easy-to-Use Guide",
+        "section_description": _clean(description.get_text(" ")) if description else None,
+        "fees": rows,
+        "status": "parsed" if rows else "widget_reference_only",
+        "note": (
+            "Fee rows were parsed from the building-page fee guide."
+            if rows else
+            "The building page loads the fee schedule through an external widget; no fee rows were embedded in the raw HTML response. Unit quote rows are intentionally not used as the building fee policy."
+        ),
     }
+    if match:
+        guide["asset_id"] = match.group(1)
+    return guide
 
 
 def parse_quote_html(
@@ -487,6 +549,8 @@ def parse_floorplans_html(
         "source": source_url,
     })
     fee_guide = _fee_guide_reference(page_html, source_url)
+    if fee_guide and fee_guide.get("fees"):
+        fees.extend(fee_guide["fees"])
     return {
         "provider": "greystar",
         "building_id": BUILDING_ID,
