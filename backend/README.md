@@ -25,6 +25,15 @@ quotes, and the page's Total Monthly Leasing Price. The adapter lives in
 `adapters/greystar/eden.py` and preserves both the total monthly price and the
 base-rent reference in its normalized JSON output.
 
+The Eden adapter also fetches the official building-level Engrain expense
+guide mounted in the floorplans page. It reads the widget asset ID, encodes it
+with the provider's Sqids alphabet, calls the read-only expense endpoint, and
+normalizes required, optional, situational, recurring, one-time, utility,
+parking, deposit, and third-party fee rows into `policies.fee_guide` and
+`policies.fees`. If the widget is unavailable, the inventory scan still
+completes and records the fetch error for retry instead of presenting an empty
+fee policy as authoritative.
+
 The Eden also has a separate ad-hoc quote path. It follows the official unit
 page into the SecureCafe lease handoff, selects a requested move-in date and
 lease term, and parses the returned base rent, recurring charges, total

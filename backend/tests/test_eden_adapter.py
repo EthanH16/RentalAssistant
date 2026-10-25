@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -9,12 +10,54 @@ sys.path.insert(0, str(ROOT))
 from adapters.greystar.eden import (  # noqa: E402
     EdenAdapter,
     parse_floorplans_html,
+    parse_fee_guide_payload,
     parse_quote_html,
     parse_unit_detail_html,
 )
 
 
 class EdenAdapterTests(unittest.TestCase):
+    def test_normalizes_engrain_fee_widget_payload(self):
+        payload = {
+            "dateOfIssuance": "2026-10-01",
+            "marketingHeadline": "Community Fees",
+            "data": [{
+                "category_header": "Required",
+                "category_rows": [
+                    {"label": "Pest Control", "value_type": "amount", "amount": "1.62",
+                     "provider_method": "Paid to Property", "frequency": "Monthly",
+                     "due_at_timing": "With Rent", "is_required": True},
+                    {"label": "Application Fee", "value_type": "text", "text_amount": "See Application",
+                     "frequency": "One-time", "is_required": True},
+                    {"label": "Income Verification", "value_type": "percentage", "percentage_amount": "2.5",
+                     "frequency": "One-time", "is_situational": True},
+                ],
+            }],
+        }
+        result = parse_fee_guide_payload(payload, "27664", "https://edendtla.com/floorplans/", "https://example.test/api")
+        self.assertEqual(result["status"], "parsed")
+        self.assertEqual(result["fees"][0]["amount"], "$1.62")
+        self.assertEqual(result["fees"][0]["frequency_due_at"], "Monthly / With Rent")
+        self.assertEqual(result["fees"][1]["amount"], "See Application")
+        self.assertEqual(result["fees"][2]["amount"], "2.5% of Base Rent")
+        self.assertEqual(result["fees"][2]["required"], "Situational")
+
+    def test_fee_widget_uses_the_provider_asset_encoding(self):
+        adapter = EdenAdapter()
+        guide = {"asset_id": "27664", "source_url": "https://edendtla.com/floorplans/"}
+        with mock.patch("adapters.greystar.eden.urlopen") as mocked:
+            response = mock.MagicMock()
+            response.status = 200
+            response.headers.get_content_charset.return_value = "utf-8"
+            response.read.return_value = json.dumps({"data": [{"category_header": "Required", "category_rows": [{
+                "label": "Pest Control", "value_type": "amount", "amount": "1.62", "frequency": "Monthly",
+            }]}]}).encode()
+            response.__enter__.return_value = response
+            mocked.return_value = response
+            result = adapter.fetch_fee_guide(guide)
+        request = mocked.call_args.args[0]
+        self.assertIn("/assets/3g71zlkwosc/expenses", request.full_url)
+        self.assertEqual(result["fees"][0]["label"], "Pest Control")
     def test_parses_embedded_unit_inventory_and_term_quotes(self):
         payload = {
             "config": {"settings": {"lease_url": "https://apply.example.test/"}},

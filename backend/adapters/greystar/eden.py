@@ -13,6 +13,7 @@ from urllib.parse import quote, urlencode, urljoin, urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
 from bs4 import BeautifulSoup
+from sqids import Sqids
 
 BUILDING_ID = "the-eden"
 BUILDING_NAME = "The Eden"
@@ -22,6 +23,8 @@ PHONE = "877-680-8826"
 RENDERABLE_ENDPOINT = "_fp-renderable"
 POPDOWN_ENDPOINT = "https://edendtla.com/popdown/get.php"
 EXPENSE_GUIDE_HOST = "https://greystar.expenseguide.com/"
+EXPENSE_GUIDE_API = EXPENSE_GUIDE_HOST + "api/engrain/v1/assets/{asset_id}/expenses"
+EXPENSE_GUIDE_SQIDS_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
 class EdenAdapterError(RuntimeError):
@@ -340,6 +343,101 @@ def _fee_guide_reference(page_html: str, source_url: str) -> dict[str, Any] | No
     return guide
 
 
+def _fee_amount_display(row: dict[str, Any]) -> str | None:
+    """Match the official Engrain widget's display transformation."""
+
+    value_type = row.get("value_type")
+    if value_type == "amount":
+        amount = _clean(row.get("amount"))
+        if re.fullmatch(r"(?:\d{1,3}(?:,\d{3})*|\d+)(?:\.\d{2})?", amount) and amount != "0.00":
+            return f"${amount}"
+        return _clean(row.get("text_amount")) or None
+    if value_type == "text":
+        return _clean(row.get("text_amount")) or None
+    if value_type == "range":
+        minimum = _clean(row.get("min_amount"))
+        maximum = _clean(row.get("max_amount"))
+        return f"${minimum} - ${maximum}" if minimum and maximum else None
+    if value_type == "stepped":
+        values = row.get("stepped_amounts")
+        if isinstance(values, str):
+            try:
+                values = json.loads(values or "[]")
+            except json.JSONDecodeError:
+                values = []
+        numbers = [_as_float(value) for value in values] if isinstance(values, list) else []
+        numbers = [value for value in numbers if value is not None]
+        if numbers:
+            return f"${min(numbers):.2f} - ${max(numbers):.2f}"
+        return None
+    if value_type == "percentage":
+        percentage = _clean(row.get("percentage_amount"))
+        return f"{percentage}% of Base Rent" if percentage else None
+    return None
+
+
+def parse_fee_guide_payload(
+    payload: dict[str, Any],
+    asset_id: str,
+    source_url: str,
+    widget_api_url: str,
+) -> dict[str, Any]:
+    """Normalize the official Engrain expense-guide JSON response."""
+
+    categories = payload.get("data")
+    if not isinstance(categories, list):
+        raise EdenAdapterError("The Engrain fee widget returned no category list")
+    fees: list[dict[str, Any]] = []
+    for category in categories:
+        if not isinstance(category, dict):
+            continue
+        category_name = _clean(category.get("category_header")) or None
+        rows = category.get("category_rows")
+        if not isinstance(rows, list):
+            continue
+        for raw in rows:
+            if not isinstance(raw, dict) or not _clean(raw.get("label")):
+                continue
+            fees.append({
+                "label": _clean(raw.get("label")),
+                "amount": _fee_amount_display(raw),
+                "applied": _clean(raw.get("provider_method")) or None,
+                "frequency_due_at": (
+                    f"{_clean(raw.get('frequency'))} / {_clean(raw.get('due_at_timing'))}"
+                    if _clean(raw.get("due_at_timing"))
+                    else _clean(raw.get("frequency")) or None
+                ),
+                "required": (
+                    "Situational"
+                    if category_name == "Situational" or raw.get("is_situational")
+                    else "Required" if raw.get("is_required") else "Optional"
+                ),
+                "category": category_name,
+                "disclaimer": _clean(raw.get("disclaimer")) or None,
+                "tooltip": _clean(raw.get("tooltip_label")) or None,
+                "is_third_party": bool(raw.get("is_third_party")),
+                "source": source_url,
+                "provider": "engrain_expense_guide",
+                "provider_payload": raw,
+            })
+    if not fees:
+        raise EdenAdapterError("The Engrain fee widget returned no fee rows")
+    return {
+        "provider": "engrain_expense_guide",
+        "asset_id": str(asset_id),
+        "source_url": source_url,
+        "widget_url": EXPENSE_GUIDE_HOST,
+        "widget_api_url": widget_api_url,
+        "status": "parsed",
+        "date_of_issuance": payload.get("dateOfIssuance"),
+        "marketing_headline": payload.get("marketingHeadline"),
+        "header_disclaimer": payload.get("headerDisclaimer"),
+        "footer_disclaimer": payload.get("footerDisclaimer"),
+        "fees": fees,
+        "note": "Fee rows were fetched from the official Engrain building-level fee widget.",
+    }
+
+
 def parse_quote_html(
     html: str,
     source_url: str,
@@ -626,6 +724,44 @@ class EdenAdapter:
             return None
         return payload.get("html") if isinstance(payload, dict) and isinstance(payload.get("html"), str) else None
 
+    def fetch_fee_guide(self, fee_guide: dict[str, Any]) -> dict[str, Any]:
+        """Fetch the building-level fee guide from the official Engrain widget."""
+
+        asset_id = _clean(fee_guide.get("asset_id"))
+        source_url = _clean(fee_guide.get("source_url")) or FLOORPLANS_URL
+        if not asset_id.isdigit():
+            raise EdenAdapterError("The Eden fee widget reference has no numeric asset ID")
+        encoded_asset_id = Sqids(
+            alphabet=EXPENSE_GUIDE_SQIDS_ALPHABET,
+            min_length=11,
+        ).encode([int(asset_id)])
+        api_url = EXPENSE_GUIDE_API.format(asset_id=encoded_asset_id)
+        request = Request(
+            api_url,
+            headers={
+                "User-Agent": self.user_agent,
+                "Referer": source_url,
+                "Origin": "https://edendtla.com",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Dest": "empty",
+            },
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                if response.status != 200:
+                    raise EdenAdapterError(f"The Eden fee widget returned HTTP {response.status}")
+                payload = json.loads(response.read().decode(response.headers.get_content_charset() or "utf-8", "replace"))
+        except EdenAdapterError:
+            raise
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise EdenAdapterError(f"The Eden fee widget could not be fetched: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise EdenAdapterError("The Eden fee widget returned an unexpected JSON shape")
+        return parse_fee_guide_payload(payload, asset_id, source_url, api_url)
+
     def _request_html(
         self,
         url: str,
@@ -726,4 +862,22 @@ class EdenAdapter:
         # Keep inventory sourced from /floorplans/ but merge the asynchronous
         # homepage marketing text into the building-level policy result.
         popdown_html = self.fetch_homepage_popdown()
-        return parse_floorplans_html(floorplans_html, FLOORPLANS_URL, popdown_html)
+        result = parse_floorplans_html(floorplans_html, FLOORPLANS_URL, popdown_html)
+        fee_guide = result["policies"].get("fee_guide")
+        if fee_guide and fee_guide.get("asset_id"):
+            try:
+                fetched_guide = self.fetch_fee_guide(fee_guide)
+            except EdenAdapterError as exc:
+                fee_guide["status"] = "widget_fetch_failed"
+                fee_guide["fetch_error"] = str(exc)
+                result["warnings"].append(
+                    "The official building fee widget was referenced but could not be fetched during this scan; fee rows require a retry."
+                )
+            else:
+                result["policies"]["fee_guide"] = fetched_guide
+                non_guide_fees = [
+                    fee for fee in result["policies"]["fees"]
+                    if fee.get("source") != FLOORPLANS_URL or fee.get("type") in {"pet_policy", "pricing_disclaimer"}
+                ]
+                result["policies"]["fees"] = non_guide_fees + fetched_guide["fees"]
+        return result
