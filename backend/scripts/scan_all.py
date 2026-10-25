@@ -24,7 +24,7 @@ from adapters.bozzuto import ParkFifthAdapter  # noqa: E402
 from adapters.brookfield import BeaudryAdapter  # noqa: E402
 from adapters.onni import BUILDINGS as ONNI_BUILDINGS, OnniAdapter  # noqa: E402
 from adapters.related import BUILDINGS as RELATED_BUILDINGS, RelatedAdapter  # noqa: E402
-from adapters.greystar import EdenAdapter  # noqa: E402
+from adapters.greystar import EdenAdapter, TheaAdapter  # noqa: E402
 from storage.sqlite import InventoryDatabase  # noqa: E402
 
 
@@ -48,6 +48,10 @@ def _fetch_eden(_: str) -> dict[str, Any]:
     return EdenAdapter().fetch()
 
 
+def _fetch_thea(_: str) -> dict[str, Any]:
+    return TheaAdapter().fetch()
+
+
 Job = tuple[str, str, Callable[[str], dict[str, Any]]]
 
 
@@ -60,6 +64,7 @@ def _jobs() -> dict[str, Job]:
     for building_id in RELATED_BUILDINGS:
         jobs[building_id] = ("related", building_id, _fetch_related)
     jobs["the-eden"] = ("greystar", "the-eden", _fetch_eden)
+    jobs["thea"] = ("greystar_spaces", "thea", _fetch_thea)
     return jobs
 
 
@@ -70,6 +75,8 @@ def _official_url(building_id: str, result: dict[str, Any]) -> str | None:
         return RELATED_BUILDINGS[building_id].detail_url
     if building_id == "the-eden":
         return "https://edendtla.com/floorplans/"
+    if building_id == "thea":
+        return "https://theadtla.com/floor-plan/"
     return result.get("source_url")
 
 

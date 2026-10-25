@@ -2,6 +2,11 @@
 
 This folder is reserved for the backend and provider adapters that will eventually power the building map, live inventory search and price matching.
 
+The reusable implementation checklist is in
+[`ADAPTER_SOP.md`](ADAPTER_SOP.md). It covers provider discovery, inventory
+patterns, fee and concession extraction, ad-hoc quotes, validation, and SQLite
+persistence.
+
 ## Current scope
 
 The first implementation target is the **Onni provider**, using **Hope + Flower** as the first building. **825 South Hill** is now validated against the same server-rendered availability shape. Olympic + Hill is also validated; it uses the same provider family but publishes unit rows on linked plan pages rather than directly on the floorplan index.
@@ -59,6 +64,38 @@ The unit-number form performs a fresh broad inventory lookup first, then uses
 the matching public unit page. The quote response is suitable for an
 on-demand client comparison; it is not a substitute for the persisted
 building-level fees/concessions or the current inventory table.
+
+THEA at Metropolis is the first Greystar Spaces/Engrain adapter. Its official
+floor-plan page exposes plan cards through a public Spaces AJAX response, but
+the plan cards are aggregates. The adapter follows each available plan into
+its plan-detail response and stores the resident-facing apartment number,
+provider unit ID, floor metadata, plan, square footage, availability date,
+base rent, total monthly leasing price, and RentCafe application URL. It also
+fetches THEA's building-level Engrain fee guide and the official homepage
+promotion text (currently the up-to-eight-weeks-free and look-and-lease offer).
+
+Run a read-only live scan:
+
+```bash
+python3 backend/scripts/run_thea.py
+python3 backend/scripts/run_thea.py --json
+```
+
+Thea's ad-hoc lease-term path uses the provider's public lease-term request
+and returns the read-only SightMap expense-calculator URL for a selected
+apartment, move-in date, and lease term:
+
+```bash
+python3 backend/scripts/run_thea_quote.py \
+  --provider-unit-id 10342778 \
+  --apartment 3906 \
+  --move-in-date 2026-11-21 \
+  --lease-term 12
+```
+
+The broad scan and ad-hoc quote are intentionally separate. The broad scan
+does not attempt every lease-term/date combination for every unit, and it does
+not automatically apply a marketing concession to rent.
 
 The first milestone intentionally excludes:
 
@@ -124,9 +161,9 @@ python3 backend/scripts/scan_all.py \
   --db backend/data/rentalassistant.sqlite3
 ```
 
-`scan_all.py` currently covers the nine implemented live adapters: Hope +
-Flower, Olympic + Hill, 825 South Hill, Park Fifth, Beaudry, The Grand
-Residences, Top of The Grand, The Emerson, and The Eden. It fetches buildings
+`scan_all.py` currently covers the implemented live adapters: Hope + Flower,
+Olympic + Hill, 825 South Hill, Park Fifth, Beaudry, The Grand Residences,
+Top of The Grand, The Emerson, The Eden, and Thea at Metropolis. It fetches buildings
 concurrently, writes SQLite sequentially, and continues scanning if one
 official site fails. Use `--workers 2` or `--workers 1` if a provider
 rate-limits requests. Use repeated `--building BUILDING_ID` arguments to run
