@@ -25,6 +25,7 @@ from adapters.brookfield import BeaudryAdapter  # noqa: E402
 from adapters.onni import BUILDINGS as ONNI_BUILDINGS, OnniAdapter  # noqa: E402
 from adapters.related import BUILDINGS as RELATED_BUILDINGS, RelatedAdapter  # noqa: E402
 from adapters.greystar import EdenAdapter, HabitatAdapter, TheaAdapter  # noqa: E402
+from adapters.helio import BUILDINGS as HELIO_BUILDINGS, HelioAdapter  # noqa: E402
 from storage.sqlite import InventoryDatabase  # noqa: E402
 
 
@@ -56,6 +57,10 @@ def _fetch_habitat(_: str) -> dict[str, Any]:
     return HabitatAdapter().fetch()
 
 
+def _fetch_helio(building_id: str) -> dict[str, Any]:
+    return HelioAdapter().fetch(building_id)
+
+
 Job = tuple[str, str, Callable[[str], dict[str, Any]]]
 
 
@@ -70,6 +75,8 @@ def _jobs() -> dict[str, Job]:
     jobs["the-eden"] = ("greystar", "the-eden", _fetch_eden)
     jobs["thea"] = ("greystar_spaces", "thea", _fetch_thea)
     jobs["habitat"] = ("greystar_spaces", "habitat", _fetch_habitat)
+    for building_id in HELIO_BUILDINGS:
+        jobs[building_id] = ("rentcafe_helio", building_id, _fetch_helio)
     return jobs
 
 
@@ -84,6 +91,8 @@ def _official_url(building_id: str, result: dict[str, Any]) -> str | None:
         return "https://theadtla.com/floor-plan/"
     if building_id == "habitat":
         return "https://habitat-residences.com/floorplans/"
+    if building_id in HELIO_BUILDINGS:
+        return HELIO_BUILDINGS[building_id]["inventory_url"]
     return result.get("source_url")
 
 

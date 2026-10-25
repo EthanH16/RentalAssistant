@@ -115,6 +115,36 @@ python3 backend/scripts/run_habitat_quote.py \
   --lease-term 12
 ```
 
+Arya, Kaia, and Venue Residences are Helio-branded properties using the same
+RentCafe/Yardi public availability components. They are covered by the shared
+`adapters/helio/adapter.py` implementation with building-specific page modes:
+Arya exposes unit rows directly on `/availableunits`, while Venue and Kaia
+expose floor-plan cards and require a follow-up request to each available plan
+page. The adapter preserves resident-facing apartment numbers, plan metadata,
+current advertised rent, application links, and official marketing promotion
+text. Promotion extraction checks both the inventory/floor-plan page and the
+official property homepage, because Helio may place the current Look & Lease
+banner only in the homepage header. Arya and Venue also support a read-only ad-hoc SecureCafe quote through
+`scripts/run_helio_quote.py`; it establishes the official page session and
+calls RentCafe's own term/move-in pricing endpoint. A zero or missing endpoint
+price is surfaced as `page_quote_only`, never treated as a valid term quote.
+Kaia uses the newer RentCafe applicant portal and remains browser-session-only
+for ad-hoc quotes.
+
+Run one of the live scans:
+
+```bash
+python3 backend/scripts/run_helio.py arya --summary
+python3 backend/scripts/run_helio.py kaia --summary
+python3 backend/scripts/run_helio.py venue --summary
+```
+
+The same three building IDs are included in `scan_all.py`. Fee-guide parsing
+is intentionally pending for this first Helio implementation; the adapter does
+not invent building-wide fees when the official fee guide has not yet been
+located. Unit-level recurring rows visible on an Arya/Venue quote page are
+returned only in the ad-hoc quote result.
+
 The first milestone intentionally excludes:
 
 - scheduled polling;
