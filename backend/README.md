@@ -97,6 +97,24 @@ The broad scan and ad-hoc quote are intentionally separate. The broad scan
 does not attempt every lease-term/date combination for every unit, and it does
 not automatically apply a marketing concession to rent.
 
+Habitat Residences uses the same Jonah Digital structured inventory pattern as
+the other Greystar-style sites. Its building-level Engrain fee widget is asset
+`36317`, and its official JSON-LD announcement is preserved as the current
+building concession. Habitat unit records include SecureCafe lease links for
+read-only move-in-date and lease-term quotes.
+
+Run a live Habitat scan or an ad-hoc quote:
+
+```bash
+python3 backend/scripts/run_habitat.py --summary
+python3 backend/scripts/scan_all.py --building habitat \
+  --db backend/data/rentalassistant.sqlite3
+python3 backend/scripts/run_habitat_quote.py \
+  --unit-slug <unit-slug> \
+  --move-in-date 2026-11-01 \
+  --lease-term 12
+```
+
 The first milestone intentionally excludes:
 
 - scheduled polling;
@@ -163,7 +181,8 @@ python3 backend/scripts/scan_all.py \
 
 `scan_all.py` currently covers the implemented live adapters: Hope + Flower,
 Olympic + Hill, 825 South Hill, Park Fifth, Beaudry, The Grand Residences,
-Top of The Grand, The Emerson, The Eden, and Thea at Metropolis. It fetches buildings
+Top of The Grand, The Emerson, The Eden, Thea at Metropolis, and Habitat
+Residences. It fetches buildings
 concurrently, writes SQLite sequentially, and continues scanning if one
 official site fails. Use `--workers 2` or `--workers 1` if a provider
 rate-limits requests. Use repeated `--building BUILDING_ID` arguments to run
