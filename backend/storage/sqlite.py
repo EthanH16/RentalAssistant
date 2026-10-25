@@ -92,7 +92,7 @@ def _state(unit: dict[str, Any], status: str) -> dict[str, Any]:
 
 
 def _status(unit: dict[str, Any]) -> str:
-    if unit.get("pricing_status") == "call_for_pricing":
+    if unit.get("pricing_status") == "call_for_pricing" or unit.get("base_rent_min") is None:
         return "needs_review"
     if unit.get("available_now"):
         return "available"

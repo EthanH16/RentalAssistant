@@ -440,6 +440,7 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
         sqft = int(sqft_match.group(1).replace(",", ""))
         rent_text = cell_texts[2]
         price_min, price_max = _rent_range(rent_text)
+        pricing_status = "priced" if price_min is not None else "call_for_pricing"
         status = re.sub(r"^Date:\s*", "", cell_texts[3], flags=re.I)
         application_url = urljoin(source_url, apply_link["href"]) if apply_link else None
         units.append(
@@ -454,6 +455,7 @@ def parse_olympic_hill_plan_html(html: str, source_url: str) -> dict[str, Any]:
                 "sqft": sqft,
                 "base_rent_min": price_min,
                 "base_rent_max": price_max,
+                "pricing_status": pricing_status,
                 "screening_base_rent": price_min,
                 "status": "available" if status.lower() == "available" else status,
                 "status_raw": status,

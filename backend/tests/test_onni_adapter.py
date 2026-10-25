@@ -145,6 +145,18 @@ class OnniAdapterTests(unittest.TestCase):
         self.assertEqual(result["units"][0]["unit_id"], "2001")
         self.assertEqual(result["units"][0]["beds"], 2)
 
+    def test_marks_unpriced_olympic_unit_for_review(self):
+        html = '''
+        <h1>Plan SKY8</h1>
+        <div class="floorplan-section" data-name="Plan SKY8" data-id="sky8">
+          <div class="row"><h2>Plan SKY8</h2><span>1 Bedroom</span> | <span>1 Bathroom</span></div>
+          <table><tr class="unit-container"><td>#4708</td><td>700</td><td>Call for pricing</td><td>12/28/2026</td><td><a href="/apply?UnitID=4708">Apply</a></td></tr></table>
+        </div>
+        '''
+        result = parse_olympic_hill_plan_html(html, "https://www.rentolympicandhill.com/floorplans/plan-sky8")
+        self.assertIsNone(result["units"][0]["base_rent_min"])
+        self.assertEqual(result["units"][0]["pricing_status"], "call_for_pricing")
+
     def test_parses_825_south_hill_shared_availability_rows(self):
         html = '''
         <div class="floorplan__availability__panel js-plan-group" data-cat="2-bed-den">
