@@ -16,7 +16,9 @@ LyvWell-branded and loads the full live inventory from the official
 `adapters/brookfield/beaudry.py`; it captures resident-facing apartment
 numbers, floor plans, total monthly leasing price, base-rent references,
 availability dates, specials, and the structured fee payload returned by the
-official endpoint. The first live scan found 74 units.
+official endpoint. It also reads Beaudry's official fee-guide page as the
+authoritative building-level fee source; the inventory fee payload is retained
+only as a diagnostic cross-check. The first live scan found 75 units.
 
 The Eden is the first Greystar adapter. Its official floorplans page embeds a
 structured JSON application state block with resident-facing unit numbers,
@@ -122,10 +124,14 @@ python3 backend/scripts/scan_all.py \
   --db backend/data/rentalassistant.sqlite3
 ```
 
-`scan_all.py` fetches buildings concurrently, writes SQLite sequentially, and
-continues scanning if one official site fails. Use `--workers 2` or `--workers
-1` if a provider rate-limits requests. Use repeated `--building BUILDING_ID`
-arguments to run a subset.
+`scan_all.py` currently covers the nine implemented live adapters: Hope +
+Flower, Olympic + Hill, 825 South Hill, Park Fifth, Beaudry, The Grand
+Residences, Top of The Grand, The Emerson, and The Eden. It fetches buildings
+concurrently, writes SQLite sequentially, and continues scanning if one
+official site fails. Use `--workers 2` or `--workers 1` if a provider
+rate-limits requests. Use repeated `--building BUILDING_ID` arguments to run
+a subset. Buildings without an implemented adapter are intentionally not
+included in this runner yet.
 
 If your shell is already inside `backend/`, use `--db data/rentalassistant.sqlite3`
 instead; otherwise `backend/data/...` would create an unintended nested path.
