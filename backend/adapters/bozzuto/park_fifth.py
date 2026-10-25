@@ -30,6 +30,9 @@ class ParkFifthBuilding:
 
 
 BUILDING = ParkFifthBuilding()
+COMMUNITY_FEES_BASE = "https://communityfees.bozzuto.com"
+COMMUNITY_FEES_SITE_ID = "7C65F7"
+COMMUNITY_FEES_URL = f"{COMMUNITY_FEES_BASE}/expense-guide-embed/{COMMUNITY_FEES_SITE_ID}/?situational_fee=false"
 
 
 def _clean(value: str | None) -> str:
@@ -79,6 +82,56 @@ def _parse_fees(soup: BeautifulSoup) -> list[dict[str, str]]:
         if len(cells) >= 4 and cells[0].lower() != "fee name":
             fees.append({"name": cells[0], "cost": cells[1], "frequency": cells[2], "type": cells[3]})
     return fees
+
+
+def parse_fee_widget_html(html: str, source_url: str = COMMUNITY_FEES_URL) -> dict[str, Any]:
+    """Parse Park Fifth's official Bozzuto community-fee widget."""
+
+    soup = BeautifulSoup(html, "html.parser")
+    container = soup.select_one(".rfwa-expense-guide-container")
+    if not container:
+        raise ParkFifthAdapterError("Park Fifth fee widget container was not found")
+    fees: list[dict[str, Any]] = []
+    for table in container.select("table.rfwa-expense-list"):
+        accordion = table.find_parent(class_="rfwa-accordion-item")
+        heading = accordion.select_one(".rfwa-group-title") if accordion else None
+        category = _clean(heading.get_text(" ")) if heading else None
+        description = accordion.select_one(".rfwa-group-description") if accordion else None
+        for row in table.select("tbody tr"):
+            cells = row.select("td")
+            if len(cells) < 4:
+                continue
+            label = _clean(cells[0].get_text(" "))
+            if not label:
+                continue
+            tooltip = cells[1].select_one("[data-tooltip]")
+            fees.append({
+                "name": label,
+                "cost": _clean(cells[1].get_text(" ")),
+                "frequency": _clean(cells[2].get_text(" ")),
+                "type": _clean(cells[3].get_text(" ")),
+                "category": category,
+                "category_description": _clean(description.get_text(" ")) if description else None,
+                "tooltip": tooltip.get("data-tooltip") if tooltip else None,
+                "source_url": source_url,
+                "provider": "bozzuto_community_fees",
+            })
+    if not fees:
+        raise ParkFifthAdapterError("Park Fifth fee widget returned no fee rows")
+    footer = container.select_one(".rfwa-expense-footer")
+    title = container.select_one("h2")
+    description = container.select_one("h2 + p")
+    return {
+        "provider": "bozzuto_community_fees",
+        "site_id": COMMUNITY_FEES_SITE_ID,
+        "source_url": source_url,
+        "status": "parsed",
+        "title": _clean(title.get_text(" ")) if title else None,
+        "description": _clean(description.get_text(" ")) if description else None,
+        "fees": fees,
+        "footer": _clean(footer.get_text(" ")) if footer else None,
+        "export_url": f"{COMMUNITY_FEES_BASE}/property/{COMMUNITY_FEES_SITE_ID}/export",
+    }
 
 
 def _parse_concessions(soup: BeautifulSoup) -> list[str]:
@@ -180,6 +233,29 @@ class ParkFifthAdapter:
                 raise ParkFifthAdapterError("Park Fifth did not return HTML")
             return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
 
+    def fetch_fee_guide(self) -> dict[str, Any]:
+        """Fetch Park Fifth's official building-level Bozzuto fee widget."""
+
+        request = Request(
+            COMMUNITY_FEES_URL,
+            headers={
+                "User-Agent": self.user_agent,
+                "Referer": BUILDING.availability_url,
+                "Origin": "https://www.parkfifthtower.com",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                if response.status != 200:
+                    raise ParkFifthAdapterError(f"Park Fifth fee widget returned HTTP {response.status}")
+                html = response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+        except ParkFifthAdapterError:
+            raise
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ParkFifthAdapterError(f"Park Fifth fee widget could not be fetched: {exc}") from exc
+        return parse_fee_widget_html(html, COMMUNITY_FEES_URL)
+
     def fetch(self) -> dict[str, Any]:
         first_html = self.fetch_html(BUILDING.availability_url)
         first = parse_park_fifth_html(first_html, BUILDING.availability_url)
@@ -194,4 +270,17 @@ class ParkFifthAdapter:
             first["policies"]["concessions"] = list(dict.fromkeys(first["policies"]["concessions"] + page["policies"]["concessions"]))
         first["units"] = list({unit["unit_id"]: unit for unit in first["units"]}.values())
         first["pages_scanned"] = page_urls
+        try:
+            first["policies"]["fee_guide"] = self.fetch_fee_guide()
+            first["policies"]["fees"] = first["policies"]["fee_guide"]["fees"]
+        except ParkFifthAdapterError as exc:
+            first["policies"]["fee_guide"] = {
+                "provider": "bozzuto_community_fees",
+                "site_id": COMMUNITY_FEES_SITE_ID,
+                "source_url": COMMUNITY_FEES_URL,
+                "status": "fetch_failed",
+                "fetch_error": str(exc),
+                "fees": [],
+            }
+            first["warnings"].append("The official Park Fifth fee widget could not be fetched during this scan; fee rows require a retry.")
         return first
