@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 import json
 import re
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
@@ -60,6 +60,148 @@ def _date(value: Any) -> str | None:
         except ValueError:
             pass
     return None
+
+
+def _iso_date(value: str) -> str:
+    """Normalize the date formats accepted by the Beaudry quote page."""
+
+    normalized = _date(value)
+    if not normalized:
+        raise BeaudryAdapterError("Move-in date must be YYYY-MM-DD or MM/DD/YYYY")
+    return normalized
+
+
+def _display_date(value: str) -> str:
+    return datetime.strptime(_iso_date(value), "%Y-%m-%d").strftime("%-m/%-d/%Y")
+
+
+def _hidden_value(soup: BeautifulSoup, element_id: str) -> str | None:
+    element = soup.select_one(f"#{element_id}")
+    return element.get("value") if element else None
+
+
+def _query_value(url: str, key: str) -> str | None:
+    values = parse_qs(urlparse(url).query).get(key)
+    return values[0] if values else None
+
+
+def _pricing_data(html: str) -> dict[str, Any]:
+    match = re.search(r"var\s+PricingData\s*=\s*(\{.*?\});", html, re.S)
+    if not match:
+        raise BeaudryAdapterError("Beaudry quote page has no structured PricingData")
+    try:
+        value = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise BeaudryAdapterError("Beaudry quote PricingData is invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise BeaudryAdapterError("Beaudry quote PricingData has an unexpected shape")
+    return value
+
+
+def _as_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _quote_fee_rows(soup: BeautifulSoup) -> list[dict[str, str]]:
+    summary = soup.select_one("#LeaseInfoSummary")
+    if not summary:
+        return []
+    rows: list[dict[str, str]] = []
+    for row in summary.select("tr"):
+        cells = [_clean(cell.get_text(" ")) for cell in row.select("td")]
+        if len(cells) >= 2:
+            rows.append({"label": cells[0], "value": cells[1]})
+    return rows
+
+
+def parse_beaudry_quote_html(
+    html: str,
+    source_url: str,
+    requested_move_in_date: str,
+    requested_lease_term: int,
+) -> dict[str, Any]:
+    """Parse one official SecureCafe date/term quote without submitting an application."""
+
+    if requested_lease_term <= 0:
+        raise BeaudryAdapterError("Lease term must be a positive number of months")
+    soup = BeautifulSoup(html, "html.parser")
+    pricing = _pricing_data(html)
+    requested_iso = _iso_date(requested_move_in_date)
+    requested_provider_date = _display_date(requested_iso)
+
+    # SecureCafe sometimes preserves a zero-padded date key; compare by date
+    # rather than assuming one exact formatting variant.
+    selected_key = next(
+        (key for key in pricing if _date(key) == requested_iso),
+        _hidden_value(soup, "dtMIDateSel") or _hidden_value(soup, "MoveInDate") or requested_provider_date,
+    )
+    if selected_key not in pricing:
+        raise BeaudryAdapterError(f"Beaudry returned no pricing for move-in date {requested_iso}")
+    date_prices = pricing[selected_key]
+    term_text = str(requested_lease_term)
+    if term_text not in date_prices or not isinstance(date_prices[term_text], dict):
+        raise BeaudryAdapterError(
+            f"Beaudry returned no {requested_lease_term}-month quote for {selected_key}"
+        )
+    selected = date_prices[term_text]
+    base_rent = _as_float(selected.get("price"))
+    recurring_addons = sum(
+        value or 0.0
+        for value in (
+            _as_float(_hidden_value(soup, "RentableItemTypesRent")),
+            _as_float(_hidden_value(soup, "MonthlyOtherRent")),
+            _as_float(selected.get("Tax")),
+        )
+    )
+    total_hidden = _as_float(_hidden_value(soup, "TotalRent"))
+    selected_date = _date(_hidden_value(soup, "dtMIDateSel") or selected_key) or requested_iso
+    specials = sorted({
+        _clean(value)
+        for value in re.findall(r"(?:\d+\s+Months?\s+Free[^<.]*|Special Offer!?[^<]*)", html, re.I)
+        if _clean(value)
+    })
+    total = total_hidden if total_hidden is not None else ((base_rent or 0.0) + recurring_addons)
+    return {
+        "provider": "brookfield_securecafe",
+        "building_id": BUILDING_ID,
+        "building_name": "Beaudry",
+        "source_url": source_url,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        "unit_id": _hidden_value(soup, "ApartmentNumber") or _hidden_value(soup, "UnitNumber") or _query_value(source_url, "UnitID"),
+        "provider_unit_id": _hidden_value(soup, "UnitId") or _query_value(source_url, "UnitID"),
+        "floor_plan_id": _hidden_value(soup, "FloorplanId") or _query_value(source_url, "FloorPlanID"),
+        "move_in_date": selected_date,
+        "lease_term_months": int(term_text),
+        "base_rent": base_rent,
+        "recurring_addons": round(recurring_addons, 2),
+        "total_monthly_price": round(total, 2),
+        "application_cost": _as_float(_hidden_value(soup, "ApplicationFee")),
+        "fee_rows": _quote_fee_rows(soup),
+        "concessions": specials,
+        "term_quotes": [
+            {
+                "lease_term_months": int(key),
+                "base_rent": _as_float(value.get("price")),
+                "emc_base_rent": _as_float(value.get("EMCBasePrice")),
+                "special_amount": _as_float(value.get("SpecialAmount")),
+                "tax": _as_float(value.get("Tax")),
+            }
+            for key, value in date_prices.items()
+            if str(key).isdigit() and isinstance(value, dict)
+        ],
+        "raw_pricing_data": selected,
+        "warnings": [
+            "Quote is read-only and does not submit an application.",
+            "Total Monthly Leasing Price includes mandatory monthly fees exposed by SecureCafe; optional pet/parking charges and variable utilities may be excluded.",
+            "Concession text is preserved separately from rent and must be checked for move-in-date, lease-term, and unit eligibility.",
+        ],
+    }
 
 
 def _available_now(available_date: str | None) -> bool:
@@ -260,6 +402,44 @@ class BeaudryAdapter:
 
     def fetch_fee_guide(self) -> dict[str, Any]:
         return parse_fee_guide_html(self.fetch_html(FEE_GUIDE_URL))
+
+    def fetch_unit_quote(
+        self,
+        unit_number: str,
+        move_in_date: str,
+        lease_term_months: int,
+    ) -> dict[str, Any]:
+        """Fetch one official Beaudry date/term quote without persistence."""
+
+        if lease_term_months <= 0:
+            raise BeaudryAdapterError("Lease term must be a positive number of months")
+        requested_iso = _iso_date(move_in_date)
+        inventory = self.fetch()
+        unit = next((item for item in inventory["units"] if item["unit_id"] == str(unit_number).strip()), None)
+        if unit is None:
+            raise BeaudryAdapterError(f"Beaudry unit {unit_number} is not in the current official inventory")
+        application_url = unit.get("application_url")
+        if not application_url:
+            raise BeaudryAdapterError(f"Beaudry unit {unit_number} has no official quote URL")
+        parsed = urlparse(application_url)
+        query = parse_qs(parsed.query)
+        # Beaudry/SecureCafe uses MoveInDate for the selected card and
+        # sLeaseTerm for the slider. sMoveInDate alone does not update the
+        # current selection.
+        query["MoveInDate"] = [_display_date(requested_iso)]
+        query["sLeaseTerm"] = [str(lease_term_months)]
+        quote_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+        html = self.fetch_html(quote_url)
+        result = parse_beaudry_quote_html(html, quote_url, requested_iso, lease_term_months)
+        result["unit_id"] = result.get("unit_id") or unit["unit_id"]
+        result["provider_unit_id"] = result.get("provider_unit_id") or unit.get("provider_unit_id")
+        result["floor_plan"] = unit.get("floor_plan")
+        result["category"] = unit.get("category")
+        result["sqft"] = unit.get("sqft")
+        result["detail_url"] = unit.get("detail_url")
+        result["advertised_unit"] = unit
+        result["official_fee_guide_url"] = FEE_GUIDE_URL
+        return result
 
     def fetch(self) -> dict[str, Any]:
         query = urlencode([

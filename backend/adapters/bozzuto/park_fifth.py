@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import gzip
+import json
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
@@ -52,6 +54,20 @@ def _date(value: str | None) -> str | None:
         return None
     month, day, year = match.groups()
     return f"{year}-{int(month):02d}-{int(day):02d}"
+
+
+def _iso_date(value: str) -> str:
+    for pattern in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(value.strip(), pattern).date().isoformat()
+        except ValueError:
+            continue
+    raise ParkFifthAdapterError("Move-in date must be YYYY-MM-DD or MM/DD/YYYY")
+
+
+def _display_date(iso_date: str) -> str:
+    parsed = datetime.strptime(iso_date, "%Y-%m-%d")
+    return f"{parsed.month}/{parsed.day}/{parsed.year}"
 
 
 def _beds(label: str) -> int | None:
@@ -216,6 +232,145 @@ def parse_park_fifth_html(html: str, source_url: str | None = None) -> dict[str,
     }
 
 
+def parse_park_fifth_calculator_html(
+    html: str,
+    source_url: str,
+    unit_number: str,
+    move_in_date: str,
+    lease_term_months: int,
+) -> dict[str, Any]:
+    """Parse an explicit SightMap calculator response, if it contains one.
+
+    SightMap is a client-rendered application.  The public unit page gives us
+    the official calculator URL, but the calculator may return only an app
+    shell or an error page to a non-browser client.  This parser therefore
+    fails closed: it only returns a quote when the response contains an
+    explicit base/total price for the requested date and term.
+    """
+
+    soup = BeautifulSoup(html, "html.parser")
+    text = _clean(soup.get_text(" "))
+    base = None
+    total = None
+    for label, value in re.findall(r"([^$]{0,80})\$\s*([0-9][0-9,]*(?:\.\d{1,2})?)", text):
+        label_lower = label.lower()
+        amount = float(value.replace(",", ""))
+        if "total" in label_lower and total is None:
+            total = amount
+        elif "base" in label_lower and base is None:
+            base = amount
+    if base is None and total is None:
+        raise ParkFifthAdapterError(
+            "Park Fifth's SightMap calculator returned no explicit quote; "
+            "the browser-rendered calculator requires an interactive session"
+        )
+    return {
+        "provider": "bozzuto_sightmap",
+        "building_id": BUILDING.building_id,
+        "building_name": BUILDING.name,
+        "source_url": source_url,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        "unit_id": unit_number.lstrip("#"),
+        "move_in_date": move_in_date,
+        "lease_term_months": lease_term_months,
+        "base_rent": base,
+        "total_monthly_price": total,
+        "raw_text": text,
+        "warnings": ["Read-only calculator response; does not submit an application."],
+    }
+
+
+def _json_response_body(raw: bytes) -> str:
+    """Decode a JSON response, including SightMap's gzip-compressed payload."""
+
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8", "replace")
+
+
+def _sightmap_app_config(html: str) -> dict[str, Any]:
+    """Extract the public SightMap app configuration from its HTML shell."""
+
+    marker = "window.__APP_CONFIG__"
+    start = html.find(marker)
+    if start < 0:
+        raise ParkFifthAdapterError("Park Fifth SightMap page has no public app configuration")
+    object_start = html.find("=", start) + 1
+    try:
+        config, _ = json.JSONDecoder().raw_decode(html[object_start:].lstrip())
+    except json.JSONDecodeError as exc:
+        raise ParkFifthAdapterError("Park Fifth SightMap app configuration is not valid JSON") from exc
+    if not isinstance(config, dict):
+        raise ParkFifthAdapterError("Park Fifth SightMap app configuration has an unexpected shape")
+    return config
+
+
+def parse_sightmap_pricing_json(
+    payload: dict[str, Any],
+    unit_number: str,
+    move_in_date: str,
+    lease_term_months: int,
+    *,
+    pricing_url: str,
+    calculator_url: str,
+) -> dict[str, Any]:
+    """Parse the official SightMap pricing response for one requested quote.
+
+    SightMap may return a single advertised-price option with a null lease
+    term. That is not a valid date/term quote, so this parser fails closed and
+    reports the available option metadata instead of guessing.
+    """
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    options = data.get("options") if isinstance(data, dict) else None
+    if not isinstance(options, list):
+        raise ParkFifthAdapterError("Park Fifth SightMap pricing response has no options list")
+    selected = next(
+        (
+            option for option in options
+            if isinstance(option, dict) and option.get("lease_term") == lease_term_months
+        ),
+        None,
+    )
+    if selected is None:
+        available_terms = [
+            option.get("lease_term")
+            for option in options
+            if isinstance(option, dict) and option.get("lease_term") is not None
+        ]
+        if not available_terms:
+            raise ParkFifthAdapterError(
+                "Park Fifth SightMap exposed only the current advertised price; "
+                "it did not expose date/lease-term pricing. The official calculator "
+                "requires the Apply portal for this unit."
+            )
+        raise ParkFifthAdapterError(
+            f"Park Fifth did not return a {lease_term_months}-month option for "
+            f"{move_in_date}; available terms: {', '.join(map(str, available_terms))}"
+        )
+    base = selected.get("price")
+    total = _money(selected.get("total_display_price"))
+    if base is None and total is None:
+        raise ParkFifthAdapterError("Park Fifth SightMap returned a term option without pricing")
+    return {
+        "provider": "bozzuto_sightmap_api",
+        "building_id": BUILDING.building_id,
+        "building_name": BUILDING.name,
+        "source_url": pricing_url,
+        "calculator_url": calculator_url,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "status": "ok",
+        "unit_id": unit_number.lstrip("#"),
+        "move_in_date": move_in_date,
+        "lease_term_months": lease_term_months,
+        "base_rent": float(base) if base is not None else None,
+        "total_monthly_price": total,
+        "lease_term_options": options,
+        "warnings": ["Read-only SightMap API response; does not submit an application."],
+    }
+
+
 class ParkFifthAdapter:
     """Fetch and normalize Park Fifth's public inventory pages."""
 
@@ -232,6 +387,26 @@ class ParkFifthAdapter:
             if response.headers.get_content_type() not in {"text/html", "application/xhtml+xml"}:
                 raise ParkFifthAdapterError("Park Fifth did not return HTML")
             return response.read().decode(response.headers.get_content_charset() or "utf-8", "replace")
+
+    def fetch_json(self, url: str, *, referer: str | None = None) -> dict[str, Any]:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": self.user_agent,
+                "Accept": "application/json",
+                **({"Referer": referer} if referer else {}),
+            },
+        )
+        with urlopen(request, timeout=self.timeout_seconds) as response:
+            if response.status != 200:
+                raise ParkFifthAdapterError(f"Park Fifth JSON endpoint returned HTTP {response.status}")
+            try:
+                payload = json.loads(_json_response_body(response.read()))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise ParkFifthAdapterError("Park Fifth returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ParkFifthAdapterError("Park Fifth JSON endpoint returned an unexpected shape")
+        return payload
 
     def fetch_fee_guide(self) -> dict[str, Any]:
         """Fetch Park Fifth's official building-level Bozzuto fee widget."""
@@ -255,6 +430,87 @@ class ParkFifthAdapter:
         except (OSError, UnicodeDecodeError) as exc:
             raise ParkFifthAdapterError(f"Park Fifth fee widget could not be fetched: {exc}") from exc
         return parse_fee_widget_html(html, COMMUNITY_FEES_URL)
+
+    def fetch_unit_quote(
+        self,
+        unit_number: str,
+        move_in_date: str,
+        lease_term_months: int,
+    ) -> dict[str, Any]:
+        """Fetch a requested Park Fifth date/term quote without persistence.
+
+        The official Park Fifth page links each unit to a SightMap expense
+        calculator. We use SightMap's own public JSON metadata and leasing
+        endpoint first. If the provider exposes only the advertised price and
+        not a lease-term option, the method raises instead of silently treating
+        that advertised price as a date/term quote.
+        """
+
+        if lease_term_months <= 0:
+            raise ParkFifthAdapterError("Lease term must be a positive number of months")
+        iso_date = _iso_date(move_in_date)
+        target = unit_number.lstrip("#").strip()
+        inventory = self.fetch()
+        unit = next((item for item in inventory["units"] if item.get("unit_id") == target), None)
+        if not unit:
+            raise ParkFifthAdapterError(f"No current Park Fifth unit matched apartment {unit_number}")
+        detail_url = unit.get("detail_url")
+        if not detail_url:
+            raise ParkFifthAdapterError(f"Park Fifth apartment {unit_number} has no official detail page")
+        detail_html = self.fetch_html(detail_url)
+        # The detail page's calculator link is the authoritative SightMap
+        # endpoint.  Reconstruct it from the detail HTML instead of guessing
+        # a provider API path.
+        detail_soup = BeautifulSoup(detail_html, "html.parser")
+        calculator_anchor = detail_soup.select_one("a[href*='sightmap.com'][href*='expense_calculator']")
+        if not calculator_anchor:
+            raise ParkFifthAdapterError(f"Park Fifth apartment {unit_number} has no official cost calculator link")
+        calculator = urljoin(detail_url, calculator_anchor.get("href"))
+        parts = urlsplit(calculator)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query.update({"unit_number": target, "mode": "expense_calculator"})
+        calculator_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+        calculator_html = self.fetch_html(calculator_url)
+        config = _sightmap_app_config(calculator_html)
+        sightmaps = config.get("sightmaps")
+        if not isinstance(sightmaps, list) or not sightmaps or not isinstance(sightmaps[0], dict):
+            raise ParkFifthAdapterError("Park Fifth SightMap page has no public sightmap API link")
+        sightmap_url = sightmaps[0].get("href")
+        if not isinstance(sightmap_url, str) or not sightmap_url:
+            raise ParkFifthAdapterError("Park Fifth SightMap page has no usable API link")
+        sightmap_payload = self.fetch_json(sightmap_url, referer=calculator_url)
+        data = sightmap_payload.get("data")
+        sightmap_unit = next(
+            (
+                item for item in data.get("units", [])
+                if isinstance(item, dict) and str(item.get("unit_number")) == target
+            ),
+            None,
+        ) if isinstance(data, dict) and isinstance(data.get("units"), list) else None
+        if not sightmap_unit:
+            raise ParkFifthAdapterError(
+                f"Park Fifth SightMap does not currently expose apartment {target}; "
+                "the public floor-plan page and calculator are out of sync"
+            )
+        pricing_url = sightmap_unit.get("leasing_price_url")
+        if not isinstance(pricing_url, str) or not pricing_url:
+            raise ParkFifthAdapterError(f"Park Fifth apartment {target} has no public pricing endpoint")
+        pricing_query = {"date": iso_date}
+        pricing_query.update({key: value for key, value in query.items() if key.startswith("oll_")})
+        pricing_url = f"{pricing_url}&{urlencode(pricing_query)}"
+        pricing_payload = self.fetch_json(pricing_url, referer=calculator_url)
+        quote = parse_sightmap_pricing_json(
+            pricing_payload,
+            target,
+            iso_date,
+            lease_term_months,
+            pricing_url=pricing_url,
+            calculator_url=calculator_url,
+        )
+        quote["calculator_url"] = calculator_url
+        quote["floor_plan"] = unit.get("floor_plan")
+        quote["advertised_unit"] = unit
+        return quote
 
     def fetch(self) -> dict[str, Any]:
         first_html = self.fetch_html(BUILDING.availability_url)
