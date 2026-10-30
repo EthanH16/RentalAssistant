@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import unescape
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -293,9 +294,109 @@ def parse_onni_availability_html(
 def parse_hope_flower_html(html: str, source_url: str) -> dict[str, Any]:
     """Parse Hope + Flower's current server-rendered availability markup."""
 
-    return parse_onni_availability_html(
+    result = parse_onni_availability_html(
         html, source_url, "hope-flower", "Hope + Flower"
     )
+    result["floorplans"] = parse_hope_flower_floorplan_links_html(html, source_url)
+    return result
+
+
+def parse_hope_flower_floorplan_links_html(html: str, source_url: str) -> list[dict[str, Any]]:
+    """Extract Hope + Flower's official floor-plan detail links.
+
+    The availability page links to the detail pages but does not include the
+    diagram image URLs directly. Those URLs are resolved by
+    :func:`parse_floorplan_media_html` after following each detail link.
+    """
+
+    soup = BeautifulSoup(html, "html.parser")
+    plans: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for link in soup.select('a[href*="/floorplans/"]'):
+        detail_url = urljoin(source_url, link.get("href", ""))
+        if detail_url in seen:
+            continue
+        seen.add(detail_url)
+        slug = urlparse(detail_url).path.rstrip("/").split("/")[-1]
+        if not slug:
+            continue
+        card = link.find_parent(class_=re.compile(r"floorplan|plan", re.I))
+        card_text = _clean(card.get_text(" ") if card else "")
+        name_match = re.search(r"\bplan\s+([a-z0-9]+)", card_text, re.I)
+        plan_name = name_match.group(1).upper() if name_match else slug.removeprefix("plan-").upper()
+        plans.append({
+            "floor_plan": plan_name,
+            "floor_plan_slug": slug,
+            "detail_url": detail_url,
+            "source_url": source_url,
+        })
+    return plans
+
+
+def _floorplan_asset_stem(floor_plan_slug: str) -> str:
+    slug = floor_plan_slug.strip().lower()
+    return slug.replace("-", "_") if slug.startswith("plan-") else f"plan_{slug.replace('-', '_')}"
+
+
+def _srcset_variants(value: str | None, source_url: str) -> list[dict[str, Any]]:
+    variants: list[dict[str, Any]] = []
+    for item in (value or "").split(","):
+        parts = item.strip().split()
+        if not parts:
+            continue
+        width_match = re.search(r"(\d+)w", parts[1]) if len(parts) > 1 else None
+        variants.append({
+            "url": urljoin(source_url, parts[0]),
+            "variant": f"{width_match.group(1)}w" if width_match else None,
+        })
+    return variants
+
+
+def parse_floorplan_media_html(
+    html: str,
+    source_url: str,
+    floor_plan_slug: str,
+) -> dict[str, Any]:
+    """Resolve one Hope + Flower floor-plan diagram from its detail page."""
+
+    soup = BeautifulSoup(html, "html.parser")
+    stem = _floorplan_asset_stem(floor_plan_slug)
+    candidates: dict[str, dict[str, Any]] = {}
+    for image in soup.select("img.floorplan__img, img[src*='/plans/'], img[data-src*='/plans/']"):
+        alt = _clean(image.get("alt"))
+        values = [image.get("src"), image.get("data-src"), image.get("data-lazy-src")]
+        values.extend(item["url"] for item in _srcset_variants(image.get("data-srcset"), source_url))
+        values.extend(item["url"] for item in _srcset_variants(image.get("srcset"), source_url))
+        for value in values:
+            if not value:
+                continue
+            absolute = urljoin(source_url, value)
+            basename = urlparse(absolute).path.rsplit("/", 1)[-1].lower()
+            if not basename.startswith(stem + ".") and not basename.startswith(stem + "@"):
+                continue
+            variant_match = re.search(r"_c(\d+)w", urlparse(absolute).path)
+            variant = f"{variant_match.group(1)}w" if variant_match else "original"
+            candidates[absolute] = {
+                "asset_type": "floorplan_diagram",
+                "format": basename.rsplit(".", 1)[-1],
+                "url": absolute,
+                "variant": variant,
+                "alt": alt or None,
+                "source_url": source_url,
+                "extraction_method": "official_html_img_srcset",
+            }
+    if not candidates:
+        raise OnniAdapterError(
+            f"No official floor-plan diagram was found for Hope + Flower {floor_plan_slug}"
+        )
+    assets = sorted(candidates.values(), key=lambda item: (item["variant"] != "1000w", item["url"]))
+    return {
+        "building_id": "hope-flower",
+        "floor_plan_slug": floor_plan_slug,
+        "source_url": source_url,
+        "status": "parsed",
+        "assets": assets,
+    }
 
 
 def parse_825_south_hill_html(html: str, source_url: str) -> dict[str, Any]:
@@ -602,12 +703,70 @@ class OnniAdapter:
             return parse_olympic_hill_floorplans_html(html, resolved_url)
         raise OnniAdapterError(f"No parser is enabled for {building_id}")
 
+    def fetch_floorplan_media(
+        self,
+        floor_plan_slug: str,
+        *,
+        download_dir: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Fetch Hope + Flower diagram metadata and optionally cache the files.
+
+        This is intentionally independent of SQLite. Callers can inspect the
+        returned manifest now and persist it later without crawling the detail
+        page again.
+        """
+
+        if floor_plan_slug.startswith("http://") or floor_plan_slug.startswith("https://"):
+            detail_url = floor_plan_slug
+            floor_plan_slug = urlparse(detail_url).path.rstrip("/").split("/")[-1]
+        else:
+            detail_url = urljoin(BUILDINGS["hope-flower"].availability_url, f"../floorplans/{floor_plan_slug}")
+        if "/floorplans/" not in detail_url:
+            raise OnniAdapterError("Hope + Flower floor-plan slug must resolve to an official floor-plan page")
+        html = self.fetch_html(detail_url)
+        result = parse_floorplan_media_html(html, detail_url, floor_plan_slug)
+        result["checked_at"] = datetime.now(timezone.utc).isoformat()
+
+        if download_dir is not None:
+            target_dir = Path(download_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for asset in result["assets"]:
+                request = Request(asset["url"], headers={"User-Agent": self.user_agent})
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    content = response.read()
+                    content_type = response.headers.get("Content-Type")
+                    last_modified = response.headers.get("Last-Modified")
+                    etag = response.headers.get("ETag")
+                suffix = asset["format"]
+                filename = f"hope-flower-{floor_plan_slug}-{asset['variant']}.{suffix}"
+                local_path = target_dir / filename
+                local_path.write_bytes(content)
+                asset.update({
+                    "local_path": str(local_path),
+                    "bytes": len(content),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "content_type": content_type,
+                    "last_modified": last_modified,
+                    "etag": etag,
+                })
+        return result
+
     def fetch(self, building_id: str) -> dict[str, Any]:
         building = BUILDINGS.get(building_id)
         if not building:
             raise OnniAdapterError(f"Unknown Onni building: {building_id}")
         html = self.fetch_html(building.availability_url)
         result = self.parse(building_id, html, building.availability_url)
+        if building_id == "hope-flower":
+            media_results: list[dict[str, Any]] = []
+            media_warnings: list[str] = []
+            for plan in result.get("floorplans", []):
+                try:
+                    media_results.append(self.fetch_floorplan_media(plan["floor_plan_slug"]))
+                except OnniAdapterError as exc:
+                    media_warnings.append(str(exc))
+            result["floorplan_media"] = media_results
+            result["warnings"].extend(media_warnings)
         if building_id == "olympic-hill":
             # Olympic + Hill publishes counts on the index and actual rows on
             # each linked plan page. Fetch those pages read-only and merge the

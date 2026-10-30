@@ -11,6 +11,8 @@ from adapters.onni import (  # noqa: E402
     parse_building_policies,
     parse_825_south_hill_html,
     parse_fixture,
+    parse_floorplan_media_html,
+    parse_hope_flower_floorplan_links_html,
     parse_olympic_hill_floorplans_html,
     parse_olympic_hill_plan_html,
     parse_unit_detail_html,
@@ -86,6 +88,33 @@ class OnniAdapterTests(unittest.TestCase):
         with self.assertRaises(OnniAdapterError):
             from adapters.onni import parse_hope_flower_html
             parse_hope_flower_html("<html></html>", "https://example.test")
+
+    def test_extracts_hope_flower_floorplan_links(self):
+        html = '''
+        <div class="floorplan__item"><h3>Plan A Studio 507 sqft</h3>
+          <a href="/floorplans/plan-a">View Floorplan</a></div>
+        <div class="floorplan__item"><h3>Plan A2 Studio 522 sqft</h3>
+          <a href="/floorplans/a2">View Floorplan</a></div>
+        '''
+        result = parse_hope_flower_floorplan_links_html(html, "https://hopeflowerdtla.com/availability")
+        self.assertEqual([item["floor_plan_slug"] for item in result], ["plan-a", "a2"])
+        self.assertEqual([item["floor_plan"] for item in result], ["A", "A2"])
+
+    def test_extracts_the_correct_hope_flower_diagram_variant(self):
+        html = '''
+        <div class="floorplan__item">
+          <img class="floorplan__img" alt="Plan a 2x"
+            src="https://s3.example/plans/_c600w/plan_a@2x.png"
+            data-srcset="https://s3.example/plans/_c600w/plan_a@2x.png 600w, https://s3.example/plans/_c1000w/plan_a@2x.png 1000w">
+          <img class="floorplan__img" alt="Plan a2 2x"
+            src="https://s3.example/plans/_c600w/plan_a2@2x.png">
+        </div>
+        '''
+        result = parse_floorplan_media_html(html, "https://hopeflowerdtla.com/floorplans/plan-a", "plan-a")
+        self.assertEqual(len(result["assets"]), 2)
+        self.assertEqual(result["assets"][0]["variant"], "1000w")
+        self.assertIn("plan_a@2x.png", result["assets"][0]["url"])
+        self.assertTrue(all("plan_a2" not in asset["url"] for asset in result["assets"]))
 
     def test_parses_olympic_hill_plan_rows(self):
         html = '''
